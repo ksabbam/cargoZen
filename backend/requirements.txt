@@ -1,0 +1,11 @@
+fastapi
+uvicorn[standard]
+snowflake-connector-python
+python-jose[cryptography]
+passlib[bcrypt]
+pydantic
+pydantic-settings
+python-multipart
+python-dotenv
+httpx
+pytz
