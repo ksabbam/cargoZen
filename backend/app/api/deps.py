@@ -25,25 +25,25 @@ async def get_current_user(token: str = Depends(oauth2_scheme)) -> UserResponse:
     jti = payload.get("jti")
     if jti:
         blacklisted = execute_one(
-            "SELECT TOKEN_JTI FROM AUTH.TOKEN_BLACKLIST WHERE TOKEN_JTI = %s",
-            (jti,), schema="AUTH"
+            "SELECT token_jti FROM token_blacklist WHERE token_jti = %s",
+            (jti,)
         )
         if blacklisted:
             raise credentials_exception
 
     # Fetch user
     user = execute_one(
-        """SELECT u.USER_ID, u.USERNAME, u.EMAIL, u.FULL_NAME, u.ROLE_ID,
-                  r.ROLE_NAME, u.IS_ACTIVE
-           FROM AUTH.USERS u
-           LEFT JOIN AUTH.ROLES r ON u.ROLE_ID = r.ROLE_ID
-           WHERE u.USER_ID = %s AND u.IS_ACTIVE = TRUE""",
-        (int(user_id),), schema="AUTH"
+        """SELECT u.user_id, u.username, u.email, u.full_name, u.role_id,
+                  r.role_name, u.is_active
+           FROM users u
+           LEFT JOIN roles r ON u.role_id = r.role_id
+           WHERE u.user_id = %s AND u.is_active = TRUE""",
+        (int(user_id),)
     )
     if user is None:
         raise credentials_exception
 
-    return UserResponse(**{k.lower(): v for k, v in user.items()})
+    return UserResponse(**user)
 
 
 async def get_current_active_user(

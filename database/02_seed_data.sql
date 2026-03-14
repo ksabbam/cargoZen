@@ -6,31 +6,34 @@ USE DATABASE CARGOZEN_DB;
 -- AUTH Schema seed data
 USE SCHEMA AUTH;
 
--- Insert default roles
-INSERT INTO ROLES (ROLE_NAME, DESCRIPTION) VALUES
-('SUPER_ADMIN', 'Full system access'),
-('ADMIN', 'Administrative access'),
-('MANAGER', 'Management level access'),
-('OPERATOR', 'Day-to-day operations'),
-('VIEWER', 'Read-only access');
+-- Roles
+INSERT INTO ROLES (ROLE_NAME, DESCRIPTION, IS_ACTIVE) VALUES
+('ADMIN', 'System Administrator', TRUE),
+('MANAGER', 'Operations Manager', TRUE),
+('OPERATOR', 'Data Entry Operator', TRUE),
+('VIEWER', 'Read-Only Viewer', TRUE);
 
--- Insert admin user (password: Admin@123 - bcrypt hashed)
--- NOTE: If login fails with 'Invalid credentials', call POST /api/auth/fix-admin-password
--- to regenerate the hash. The hash below may not match your bcrypt library version.
-INSERT INTO USERS (USERNAME, EMAIL, PASSWORD_HASH, FULL_NAME, ROLE_ID) VALUES
-('admin', 'admin@cargozen.com', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMUJqSBRIKJHF4QiR3YbXVJnUe', 'System Administrator', 1),
-('operator1', 'operator@cargozen.com', '$2b$12$LQv3c1yqBWVHxkd0LHAkCOYz6TtxMUJqSBRIKJHF4QiR3YbXVJnUe', 'John Operator', 4);
+-- Users  (default password for all = Admin@123, bcrypt-hashed)
+INSERT INTO USERS (USERNAME, EMAIL, PASSWORD_HASH, FULL_NAME, ROLE_ID, IS_ACTIVE) VALUES
+('admin',    'admin@cargozen.com',    '$2b$12$m.y.1P6OCN0HzuydOdTaduJbETnH81zC/elrd1iQ2Lb2mDcQgzxmq', 'System Administrator', 1, TRUE),
+('manager',  'manager@cargozen.com',  '$2b$12$m.y.1P6OCN0HzuydOdTaduJbETnH81zC/elrd1iQ2Lb2mDcQgzxmq', 'Operations Manager',   2, TRUE),
+('operator', 'operator@cargozen.com', '$2b$12$m.y.1P6OCN0HzuydOdTaduJbETnH81zC/elrd1iQ2Lb2mDcQgzxmq', 'Data Operator',        3, TRUE);
 
--- Insert role permissions
-INSERT INTO ROLE_PERMISSIONS (ROLE_ID, MODULE, CAN_VIEW, CAN_CREATE, CAN_EDIT, CAN_DELETE, CAN_EXPORT, CAN_APPROVE)
-SELECT 1, MODULE, TRUE, TRUE, TRUE, TRUE, TRUE, TRUE
-FROM (VALUES
-    ('organizations'), ('org_groups'), ('airlines'), ('shipping_lines'),
-    ('accounts'), ('charge_master'), ('default_charges'), ('business_dimensions'),
-    ('commodities'), ('system_settings'), ('vendor_contracts'), ('custom_clearing'),
-    ('import_jobs'), ('bank_payments'), ('bank_receipts'), ('journal_entries'),
-    ('debit_notes'), ('purchase_bills'), ('customs_export'), ('reports')
-) AS MODULES(MODULE);
+-- Role Permissions
+INSERT INTO ROLE_PERMISSIONS (ROLE_ID, MODULE, CAN_VIEW, CAN_CREATE, CAN_EDIT, CAN_DELETE) VALUES
+(1, 'DASHBOARD',      TRUE, TRUE, TRUE, TRUE),
+(1, 'ADMINISTRATION', TRUE, TRUE, TRUE, TRUE),
+(1, 'TRANSACTIONS',   TRUE, TRUE, TRUE, TRUE),
+(1, 'REPORTS',        TRUE, TRUE, TRUE, TRUE),
+(2, 'DASHBOARD',      TRUE, TRUE, TRUE, FALSE),
+(2, 'ADMINISTRATION', TRUE, TRUE, TRUE, FALSE),
+(2, 'TRANSACTIONS',   TRUE, TRUE, TRUE, FALSE),
+(2, 'REPORTS',        TRUE, TRUE, FALSE, FALSE),
+(3, 'DASHBOARD',      TRUE, FALSE, FALSE, FALSE),
+(3, 'TRANSACTIONS',   TRUE, TRUE,  TRUE,  FALSE),
+(3, 'REPORTS',        TRUE, FALSE, FALSE, FALSE),
+(4, 'DASHBOARD',      TRUE, FALSE, FALSE, FALSE),
+(4, 'REPORTS',        TRUE, FALSE, FALSE, FALSE);
 
 -- ADMIN Schema seed data
 USE SCHEMA ADMIN;
@@ -140,18 +143,18 @@ INSERT INTO COMMODITIES (COMMODITY_CODE, COMMODITY_NAME, HS_CODE, COMMODITY_GROU
 ('BOOK', 'Books & Publications', '4901', 'MEDIA', FALSE, TRUE),
 ('JEWL', 'Jewelry & Precious Metals', '7113', 'LUXURY', FALSE, TRUE);
 
--- System Settings
-INSERT INTO SYSTEM_SETTINGS (SETTING_KEY, SETTING_VALUE, SETTING_GROUP, DATA_TYPE, DESCRIPTION) VALUES
-('company_name', '"CargoZen Logistics LLC"', 'GENERAL', 'STRING', 'Company name'),
-('base_currency', '"USD"', 'FINANCE', 'STRING', 'Base currency code'),
-('date_format', '"DD/MM/YYYY"', 'GENERAL', 'STRING', 'Date display format'),
-('fiscal_year_start', '"01"', 'FINANCE', 'STRING', 'Fiscal year start month (01-12)'),
-('auto_approve_orgs', 'false', 'ADMIN', 'BOOLEAN', 'Auto-approve new organizations'),
-('session_timeout_mins', '60', 'SECURITY', 'NUMBER', 'Session timeout in minutes'),
-('max_login_attempts', '5', 'SECURITY', 'NUMBER', 'Maximum failed login attempts'),
-('job_no_prefix', '"IMP-"', 'TRANSACTIONS', 'STRING', 'Import job number prefix'),
-('payment_no_prefix', '"PAY-"', 'TRANSACTIONS', 'STRING', 'Payment number prefix'),
-('receipt_no_prefix', '"RCP-"', 'TRANSACTIONS', 'STRING', 'Receipt number prefix');
+-- System Settings (VARIANT column requires INSERT..SELECT with PARSE_JSON)
+INSERT INTO SYSTEM_SETTINGS (SETTING_KEY, SETTING_VALUE, SETTING_GROUP, DATA_TYPE, DESCRIPTION)
+SELECT 'company_name', PARSE_JSON('"CargoZen Logistics LLC"'), 'GENERAL', 'STRING', 'Company name'
+UNION ALL SELECT 'base_currency', PARSE_JSON('"USD"'), 'FINANCE', 'STRING', 'Base currency code'
+UNION ALL SELECT 'date_format', PARSE_JSON('"DD/MM/YYYY"'), 'GENERAL', 'STRING', 'Date display format'
+UNION ALL SELECT 'fiscal_year_start', PARSE_JSON('"01"'), 'FINANCE', 'STRING', 'Fiscal year start month (01-12)'
+UNION ALL SELECT 'auto_approve_orgs', PARSE_JSON('false'), 'ADMIN', 'BOOLEAN', 'Auto-approve new organizations'
+UNION ALL SELECT 'session_timeout_mins', PARSE_JSON('60'), 'SECURITY', 'NUMBER', 'Session timeout in minutes'
+UNION ALL SELECT 'max_login_attempts', PARSE_JSON('5'), 'SECURITY', 'NUMBER', 'Maximum failed login attempts'
+UNION ALL SELECT 'job_no_prefix', PARSE_JSON('"IMP-"'), 'TRANSACTIONS', 'STRING', 'Import job number prefix'
+UNION ALL SELECT 'payment_no_prefix', PARSE_JSON('"PAY-"'), 'TRANSACTIONS', 'STRING', 'Payment number prefix'
+UNION ALL SELECT 'receipt_no_prefix', PARSE_JSON('"RCP-"'), 'TRANSACTIONS', 'STRING', 'Receipt number prefix';
 
 -- Default Charges (preset charge amounts per job type / mode)
 INSERT INTO DEFAULT_CHARGES (CHARGE_ID, JOB_TYPE, TRANSPORT_MODE, AMOUNT, CURRENCY, IS_ACTIVE) VALUES

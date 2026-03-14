@@ -76,19 +76,70 @@ async def health_check():
 
 @app.on_event("startup")
 async def startup_info():
-    """Log startup info. DB checks are done lazily on first request."""
+    """Log startup info and verify database readiness."""
     import logging
     log = logging.getLogger("cargozen")
-    log.info(f"CargoZen API started")
-    log.info(f"Snowflake: {settings.SNOWFLAKE_ACCOUNT} / {settings.SNOWFLAKE_USER}")
-    if not settings.SNOWFLAKE_PASSWORD:
-        print("\n  ⚠  SNOWFLAKE_PASSWORD is empty in backend/.env")
-        print("     Set it so the app can connect to Snowflake.")
-        print("     In Snowflake Worksheet run:")
-        print("       ALTER USER SUSANI SET PASSWORD = 'YourPassword';")
-        print("     Then set SNOWFLAKE_PASSWORD=YourPassword in backend/.env\n")
+    log.info("CargoZen API started (Supabase / PostgreSQL)")
+    print("\n  [*] CargoZen API starting — Supabase (PostgreSQL)")
+    _check_database(log)
+
+
+def _check_database(log):
+    """Read-only check: verify tables, roles, and admin user exist."""
+    from app.core.security import verify_password
+    from app.core.database import execute_one
+
+    ok = True
+
+    # Test basic connectivity
+    try:
+        execute_one("SELECT 1 AS ok")
+        print("  [OK] Database connection successful")
+    except Exception as exc:
+        print(f"  [!!] Cannot connect to database: {exc}")
+        return
+
+    # Check roles
+    try:
+        row = execute_one("SELECT COUNT(*) AS cnt FROM roles")
+        cnt = int(row["cnt"]) if row else 0
+        if cnt > 0:
+            print(f"  [OK] Roles: {cnt} found")
+        else:
+            print("  [!!] Roles table is EMPTY")
+            ok = False
+    except Exception as exc:
+        print(f"  [!!] Cannot query roles: {exc}")
+        ok = False
+
+    # Check admin user + password hash
+    try:
+        user = execute_one(
+            "SELECT user_id, username, password_hash FROM users WHERE username = 'admin'"
+        )
+        if user:
+            stored_hash = user.get("password_hash", "")
+            if stored_hash and verify_password("Admin@123", stored_hash):
+                print("  [OK] Admin user found, password hash verified")
+            else:
+                print("  [!!] Admin user found but password hash DOES NOT match 'Admin@123'")
+                ok = False
+        else:
+            print("  [!!] Admin user NOT FOUND")
+            ok = False
+    except Exception as exc:
+        print(f"  [!!] Cannot query users: {exc}")
+        ok = False
+
+    if not ok:
+        print("")
+        print("  ================================================")
+        print("  ACTION REQUIRED: Run the setup script!")
+        print("  ================================================")
+        print("  cd backend && python setup_db.py")
+        print("")
     else:
-        print("\n  ★ CargoZen API ready — Snowflake password configured\n")
+        print("  [OK] Database ready\n")
 
 
 @app.exception_handler(Exception)

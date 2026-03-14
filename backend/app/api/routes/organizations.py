@@ -16,16 +16,16 @@ def build_org_filters(search: Optional[str], org_type: Optional[str],
     conditions = ["1=1"]
     params = []
     if search:
-        conditions.append("(ORG_CODE ILIKE %s OR ORG_NAME ILIKE %s OR ORG_SHORT_NAME ILIKE %s)")
+        conditions.append("(org_code ILIKE %s OR org_name ILIKE %s OR org_short_name ILIKE %s)")
         params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
     if org_type:
-        conditions.append("ORG_TYPE = %s")
+        conditions.append("org_type = %s")
         params.append(org_type)
     if approval_status:
-        conditions.append("APPROVAL_STATUS = %s")
+        conditions.append("approval_status = %s")
         params.append(approval_status)
     if is_active is not None:
-        conditions.append("IS_ACTIVE = %s")
+        conditions.append("is_active = %s")
         params.append(is_active)
     return " AND ".join(conditions), params
 
@@ -38,7 +38,7 @@ async def list_organizations(
     org_type: Optional[str] = None,
     approval_status: Optional[str] = None,
     is_active: Optional[bool] = None,
-    sort_by: str = "ORG_NAME",
+    sort_by: str = "org_name",
     sort_order: str = "ASC",
     current_user: UserResponse = Depends(get_current_active_user)
 ):
@@ -46,22 +46,22 @@ async def list_organizations(
     offset = (page - 1) * limit
 
     count_row = execute_one(
-        f"SELECT COUNT(*) AS CNT FROM ADMIN.ORGANIZATIONS WHERE {where_clause}",
-        tuple(params), schema="ADMIN"
+        f"SELECT COUNT(*) AS cnt FROM organizations WHERE {where_clause}",
+        tuple(params)
     )
-    total = count_row["CNT"] if count_row else 0
+    total = count_row["cnt"] if count_row else 0
 
     rows = execute_query(
-        f"""SELECT o.*, g.GROUP_NAME FROM ADMIN.ORGANIZATIONS o
-            LEFT JOIN ADMIN.ORGANIZATION_GROUPS g ON o.GROUP_ID = g.GROUP_ID
+        f"""SELECT o.*, g.group_name FROM organizations o
+            LEFT JOIN organization_groups g ON o.group_id = g.group_id
             WHERE {where_clause}
             ORDER BY {sort_by} {sort_order}
             LIMIT %s OFFSET %s""",
-        tuple(params + [limit, offset]), schema="ADMIN"
+        tuple(params + [limit, offset])
     )
 
     return PaginatedResponse(
-        data=[{k.lower(): v for k, v in r.items()} for r in rows],
+        data=rows,
         total=total, page=page, limit=limit,
         total_pages=math.ceil(total / limit) if total > 0 else 1
     )
@@ -74,23 +74,23 @@ async def search_organizations(
     current_user: UserResponse = Depends(get_current_active_user)
 ):
     params = []
-    conditions = ["IS_ACTIVE = TRUE", "APPROVAL_STATUS = 'APPROVED'"]
+    conditions = ["is_active = TRUE", "approval_status = 'APPROVED'"]
     if q:
-        conditions.append("(ORG_CODE ILIKE %s OR ORG_NAME ILIKE %s)")
+        conditions.append("(org_code ILIKE %s OR org_name ILIKE %s)")
         params.extend([f"%{q}%", f"%{q}%"])
     if type_filter == "customer":
-        conditions.append("IS_CUSTOMER = TRUE")
+        conditions.append("is_customer = TRUE")
     elif type_filter == "vendor":
-        conditions.append("IS_VENDOR = TRUE")
+        conditions.append("is_vendor = TRUE")
     elif type_filter == "agent":
-        conditions.append("IS_AGENT = TRUE")
+        conditions.append("is_agent = TRUE")
 
     rows = execute_query(
-        f"SELECT ORG_ID AS id, ORG_CODE AS code, ORG_NAME AS name FROM ADMIN.ORGANIZATIONS "
+        f"SELECT org_id AS id, org_code AS code, org_name AS name FROM organizations "
         f"WHERE {' AND '.join(conditions)} LIMIT 50",
-        tuple(params), schema="ADMIN"
+        tuple(params)
     )
-    return [{k.lower(): v for k, v in r.items()} for r in rows]
+    return rows
 
 
 @router.get("/{org_id}", response_model=dict)
@@ -99,14 +99,14 @@ async def get_organization(
     current_user: UserResponse = Depends(get_current_active_user)
 ):
     row = execute_one(
-        """SELECT o.*, g.GROUP_NAME FROM ADMIN.ORGANIZATIONS o
-           LEFT JOIN ADMIN.ORGANIZATION_GROUPS g ON o.GROUP_ID = g.GROUP_ID
-           WHERE o.ORG_ID = %s""",
-        (org_id,), schema="ADMIN"
+        """SELECT o.*, g.group_name FROM organizations o
+           LEFT JOIN organization_groups g ON o.group_id = g.group_id
+           WHERE o.org_id = %s""",
+        (org_id,)
     )
     if not row:
         raise HTTPException(status_code=404, detail="Organization not found")
-    return {k.lower(): v for k, v in row.items()}
+    return row
 
 
 @router.post("", response_model=dict, status_code=201)
@@ -115,30 +115,29 @@ async def create_organization(
     current_user: UserResponse = Depends(get_current_active_user)
 ):
     existing = execute_one(
-        "SELECT ORG_ID FROM ADMIN.ORGANIZATIONS WHERE ORG_CODE = %s",
-        (payload.org_code,), schema="ADMIN"
+        "SELECT org_id FROM organizations WHERE org_code = %s",
+        (payload.org_code,)
     )
     if existing:
         raise HTTPException(status_code=400, detail="Organization code already exists")
 
     row = execute_one(
-        """INSERT INTO ADMIN.ORGANIZATIONS
-           (ORG_CODE, ORG_NAME, ORG_SHORT_NAME, GROUP_ID, ORG_TYPE,
-            IS_CUSTOMER, IS_VENDOR, IS_AGENT, IS_CARRIER,
-            ADDRESS_LINE1, ADDRESS_LINE2, CITY, STATE, COUNTRY, POSTAL_CODE,
-            PHONE, EMAIL, WEBSITE, TAX_ID, CREDIT_LIMIT, CREDIT_DAYS, CURRENCY,
-            APPROVAL_STATUS, CREATED_BY)
+        """INSERT INTO organizations
+           (org_code, org_name, org_short_name, group_id, org_type,
+            is_customer, is_vendor, is_agent, is_carrier,
+            address_line1, address_line2, city, state, country, postal_code,
+            phone, email, website, tax_id, credit_limit, credit_days, currency,
+            approval_status, created_by)
            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'PENDING',%s)
-           RETURNING ORG_ID""",
+           RETURNING org_id""",
         (payload.org_code, payload.org_name, payload.org_short_name, payload.group_id,
          payload.org_type, payload.is_customer, payload.is_vendor, payload.is_agent,
          payload.is_carrier, payload.address_line1, payload.address_line2, payload.city,
          payload.state, payload.country, payload.postal_code, payload.phone, payload.email,
          payload.website, payload.tax_id, payload.credit_limit, payload.credit_days,
-         payload.currency, current_user.user_id),
-        schema="ADMIN"
+         payload.currency, current_user.user_id)
     )
-    return {"org_id": row["ORG_ID"] if row else None, "message": "Organization created successfully"}
+    return {"org_id": row["org_id"] if row else None, "message": "Organization created successfully"}
 
 
 @router.put("/{org_id}", response_model=MessageResponse)
@@ -148,25 +147,24 @@ async def update_organization(
     current_user: UserResponse = Depends(get_current_active_user)
 ):
     existing = execute_one(
-        "SELECT ORG_ID FROM ADMIN.ORGANIZATIONS WHERE ORG_ID = %s", (org_id,), schema="ADMIN"
+        "SELECT org_id FROM organizations WHERE org_id = %s", (org_id,)
     )
     if not existing:
         raise HTTPException(status_code=404, detail="Organization not found")
 
     execute_write(
-        """UPDATE ADMIN.ORGANIZATIONS SET
-           ORG_NAME=%s, ORG_SHORT_NAME=%s, GROUP_ID=%s, ORG_TYPE=%s,
-           IS_CUSTOMER=%s, IS_VENDOR=%s, IS_AGENT=%s, IS_CARRIER=%s,
-           ADDRESS_LINE1=%s, ADDRESS_LINE2=%s, CITY=%s, STATE=%s, COUNTRY=%s,
-           POSTAL_CODE=%s, PHONE=%s, EMAIL=%s, WEBSITE=%s, TAX_ID=%s,
-           CREDIT_LIMIT=%s, CREDIT_DAYS=%s, CURRENCY=%s, UPDATED_AT=CURRENT_TIMESTAMP()
-           WHERE ORG_ID=%s""",
+        """UPDATE organizations SET
+           org_name=%s, org_short_name=%s, group_id=%s, org_type=%s,
+           is_customer=%s, is_vendor=%s, is_agent=%s, is_carrier=%s,
+           address_line1=%s, address_line2=%s, city=%s, state=%s, country=%s,
+           postal_code=%s, phone=%s, email=%s, website=%s, tax_id=%s,
+           credit_limit=%s, credit_days=%s, currency=%s, updated_at=NOW()
+           WHERE org_id=%s""",
         (payload.org_name, payload.org_short_name, payload.group_id, payload.org_type,
          payload.is_customer, payload.is_vendor, payload.is_agent, payload.is_carrier,
          payload.address_line1, payload.address_line2, payload.city, payload.state,
          payload.country, payload.postal_code, payload.phone, payload.email, payload.website,
-         payload.tax_id, payload.credit_limit, payload.credit_days, payload.currency, org_id),
-        schema="ADMIN"
+         payload.tax_id, payload.credit_limit, payload.credit_days, payload.currency, org_id)
     )
     return MessageResponse(message="Organization updated successfully")
 
@@ -182,11 +180,11 @@ async def update_approval_status(
         raise HTTPException(status_code=400, detail="Invalid approval status")
 
     execute_write(
-        """UPDATE ADMIN.ORGANIZATIONS SET
-           APPROVAL_STATUS=%s, APPROVAL_DATE=CURRENT_TIMESTAMP(), APPROVED_BY=%s,
-           UPDATED_AT=CURRENT_TIMESTAMP()
-           WHERE ORG_ID=%s""",
-        (status_val, current_user.user_id, org_id), schema="ADMIN"
+        """UPDATE organizations SET
+           approval_status=%s, approval_date=NOW(), approved_by=%s,
+           updated_at=NOW()
+           WHERE org_id=%s""",
+        (status_val, current_user.user_id, org_id)
     )
     return MessageResponse(message=f"Organization {status_val.lower()} successfully")
 
@@ -197,7 +195,7 @@ async def delete_organization(
     current_user: UserResponse = Depends(get_current_active_user)
 ):
     execute_write(
-        "UPDATE ADMIN.ORGANIZATIONS SET IS_ACTIVE=FALSE, UPDATED_AT=CURRENT_TIMESTAMP() WHERE ORG_ID=%s",
-        (org_id,), schema="ADMIN"
+        "UPDATE organizations SET is_active=FALSE, updated_at=NOW() WHERE org_id=%s",
+        (org_id,)
     )
     return MessageResponse(message="Organization deactivated successfully")

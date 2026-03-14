@@ -24,68 +24,67 @@ async def list_import_jobs(
     conditions = ["1=1"]
     params = []
     if search:
-        conditions.append("(JOB_NO ILIKE %s OR BL_NO ILIKE %s)")
+        conditions.append("(j.job_no ILIKE %s OR j.bl_no ILIKE %s)")
         params.extend([f"%{search}%", f"%{search}%"])
     if status:
-        conditions.append("STATUS = %s")
+        conditions.append("j.status = %s")
         params.append(status)
     if transport_mode:
-        conditions.append("TRANSPORT_MODE = %s")
+        conditions.append("j.transport_mode = %s")
         params.append(transport_mode)
     if date_from:
-        conditions.append("JOB_DATE >= %s")
+        conditions.append("j.job_date >= %s")
         params.append(date_from)
     if date_to:
-        conditions.append("JOB_DATE <= %s")
+        conditions.append("j.job_date <= %s")
         params.append(date_to)
     where = " AND ".join(conditions)
     offset = (page - 1) * limit
-    total = execute_one(f"SELECT COUNT(*) AS CNT FROM TXN.IMPORT_JOBS WHERE {where}",
-                        tuple(params), schema="TXN")["CNT"]
+    total = execute_one(f"SELECT COUNT(*) AS cnt FROM import_jobs j WHERE {where}",
+                        tuple(params))["cnt"]
     rows = execute_query(
-        f"""SELECT j.*, 
-                   s.ORG_NAME AS shipper_name, c.ORG_NAME AS consignee_name
-            FROM TXN.IMPORT_JOBS j
-            LEFT JOIN ADMIN.ORGANIZATIONS s ON j.SHIPPER_ID = s.ORG_ID
-            LEFT JOIN ADMIN.ORGANIZATIONS c ON j.CONSIGNEE_ID = c.ORG_ID
-            WHERE {where} ORDER BY j.JOB_DATE DESC, j.JOB_NO DESC LIMIT %s OFFSET %s""",
-        tuple(params + [limit, offset]), schema="TXN"
+        f"""SELECT j.*,
+                   s.org_name AS shipper_name, c.org_name AS consignee_name
+            FROM import_jobs j
+            LEFT JOIN organizations s ON j.shipper_id = s.org_id
+            LEFT JOIN organizations c ON j.consignee_id = c.org_id
+            WHERE {where} ORDER BY j.job_date DESC, j.job_no DESC LIMIT %s OFFSET %s""",
+        tuple(params + [limit, offset])
     )
-    return PaginatedResponse(data=[{k.lower(): v for k, v in r.items()} for r in rows],
-                             total=total, page=page, limit=limit,
+    return PaginatedResponse(data=rows, total=total, page=page, limit=limit,
                              total_pages=math.ceil(total / limit) if total > 0 else 1)
 
 
 @import_jobs_router.get("/{job_id}")
 async def get_import_job(job_id: int, current_user: UserResponse = Depends(get_current_active_user)):
     row = execute_one(
-        """SELECT j.*, s.ORG_NAME AS shipper_name, c.ORG_NAME AS consignee_name
-           FROM TXN.IMPORT_JOBS j
-           LEFT JOIN ADMIN.ORGANIZATIONS s ON j.SHIPPER_ID = s.ORG_ID
-           LEFT JOIN ADMIN.ORGANIZATIONS c ON j.CONSIGNEE_ID = c.ORG_ID
-           WHERE j.JOB_ID = %s""",
-        (job_id,), schema="TXN"
+        """SELECT j.*, s.org_name AS shipper_name, c.org_name AS consignee_name
+           FROM import_jobs j
+           LEFT JOIN organizations s ON j.shipper_id = s.org_id
+           LEFT JOIN organizations c ON j.consignee_id = c.org_id
+           WHERE j.job_id = %s""",
+        (job_id,)
     )
     if not row:
         raise HTTPException(status_code=404, detail="Job not found")
     charges = execute_query(
-        "SELECT * FROM TXN.JOB_CHARGES WHERE JOB_ID = %s ORDER BY LINE_ID",
-        (job_id,), schema="TXN"
+        "SELECT * FROM job_charges WHERE job_id = %s ORDER BY line_id",
+        (job_id,)
     )
-    result = {k.lower(): v for k, v in row.items()}
-    result["charges"] = [{k.lower(): v for k, v in c.items()} for c in charges]
+    result = dict(row)
+    result["charges"] = charges
     return result
 
 
 @import_jobs_router.post("", status_code=201)
 async def create_import_job(payload: dict, current_user: UserResponse = Depends(get_current_active_user)):
     row = execute_one(
-        """INSERT INTO TXN.IMPORT_JOBS (JOB_NO, JOB_DATE, TRANSPORT_MODE, SHIPPER_ID, CONSIGNEE_ID,
-           CARRIER_ID, CARRIER_TYPE, BL_NO, FLIGHT_NO, VESSEL_NAME, VOYAGE_NO, POL, POD,
-           ETA, ATA, COMMODITY_ID, GROSS_WEIGHT, CHARGEABLE_WEIGHT, VOLUME_CBM,
-           PACKAGES, PACKAGE_TYPE, INCOTERMS, FREIGHT_CURRENCY, FREIGHT_AMOUNT, STATUS, REMARKS, CREATED_BY)
+        """INSERT INTO import_jobs (job_no, job_date, transport_mode, shipper_id, consignee_id,
+           carrier_id, carrier_type, bl_no, flight_no, vessel_name, voyage_no, pol, pod,
+           eta, ata, commodity_id, gross_weight, chargeable_weight, volume_cbm,
+           packages, package_type, incoterms, freight_currency, freight_amount, status, remarks, created_by)
            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-           RETURNING JOB_ID""",
+           RETURNING job_id""",
         (payload["job_no"], payload["job_date"], payload.get("transport_mode"),
          payload.get("shipper_id"), payload.get("consignee_id"), payload.get("carrier_id"),
          payload.get("carrier_type"), payload.get("bl_no"), payload.get("flight_no"),
@@ -94,21 +93,18 @@ async def create_import_job(payload: dict, current_user: UserResponse = Depends(
          payload.get("gross_weight"), payload.get("chargeable_weight"), payload.get("volume_cbm"),
          payload.get("packages"), payload.get("package_type"), payload.get("incoterms"),
          payload.get("freight_currency"), payload.get("freight_amount"),
-         payload.get("status", "OPEN"), payload.get("remarks"), current_user.user_id),
-        schema="TXN"
+         payload.get("status", "OPEN"), payload.get("remarks"), current_user.user_id)
     )
-    job_id = row["JOB_ID"] if row else None
-    # Insert charges if provided
+    job_id = row["job_id"] if row else None
     for charge in payload.get("charges", []):
         execute_write(
-            """INSERT INTO TXN.JOB_CHARGES (JOB_ID, CHARGE_ID, CHARGE_NAME, QUANTITY, UNIT_TYPE,
-               RATE, CURRENCY, AMOUNT, TAX_AMOUNT, TOTAL_AMOUNT, VENDOR_ID)
+            """INSERT INTO job_charges (job_id, charge_id, charge_name, quantity, unit_type,
+               rate, currency, amount, tax_amount, total_amount, vendor_id)
                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
             (job_id, charge.get("charge_id"), charge.get("charge_name"),
              charge.get("quantity", 1), charge.get("unit_type"), charge.get("rate"),
              charge.get("currency"), charge.get("amount"), charge.get("tax_amount", 0),
-             charge.get("total_amount"), charge.get("vendor_id")),
-            schema="TXN"
+             charge.get("total_amount"), charge.get("vendor_id"))
         )
     return {"job_id": job_id, "message": "Import job created"}
 
@@ -116,13 +112,12 @@ async def create_import_job(payload: dict, current_user: UserResponse = Depends(
 @import_jobs_router.put("/{job_id}", response_model=MessageResponse)
 async def update_import_job(job_id: int, payload: dict, current_user: UserResponse = Depends(get_current_active_user)):
     execute_write(
-        """UPDATE TXN.IMPORT_JOBS SET TRANSPORT_MODE=%s, SHIPPER_ID=%s, CONSIGNEE_ID=%s,
-           BL_NO=%s, VESSEL_NAME=%s, ETA=%s, ATA=%s, STATUS=%s, REMARKS=%s,
-           UPDATED_AT=CURRENT_TIMESTAMP() WHERE JOB_ID=%s""",
+        """UPDATE import_jobs SET transport_mode=%s, shipper_id=%s, consignee_id=%s,
+           bl_no=%s, vessel_name=%s, eta=%s, ata=%s, status=%s, remarks=%s,
+           updated_at=NOW() WHERE job_id=%s""",
         (payload.get("transport_mode"), payload.get("shipper_id"), payload.get("consignee_id"),
          payload.get("bl_no"), payload.get("vessel_name"), payload.get("eta"), payload.get("ata"),
-         payload.get("status"), payload.get("remarks"), job_id),
-        schema="TXN"
+         payload.get("status"), payload.get("remarks"), job_id)
     )
     return MessageResponse(message="Job updated")
 
@@ -143,62 +138,60 @@ async def list_bank_payments(
     conditions = ["1=1"]
     params = []
     if search:
-        conditions.append("(PAYMENT_NO ILIKE %s OR PAYEE_NAME ILIKE %s OR BANK_NAME ILIKE %s)")
+        conditions.append("(payment_no ILIKE %s OR payee_name ILIKE %s OR bank_name ILIKE %s)")
         params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
     if status:
-        conditions.append("STATUS = %s")
+        conditions.append("status = %s")
         params.append(status)
     if date_from:
-        conditions.append("PAYMENT_DATE >= %s")
+        conditions.append("payment_date >= %s")
         params.append(date_from)
     if date_to:
-        conditions.append("PAYMENT_DATE <= %s")
+        conditions.append("payment_date <= %s")
         params.append(date_to)
     where = " AND ".join(conditions)
     offset = (page - 1) * limit
-    total = execute_one(f"SELECT COUNT(*) AS CNT FROM TXN.BANK_PAYMENTS WHERE {where}",
-                        tuple(params), schema="TXN")["CNT"]
+    total = execute_one(f"SELECT COUNT(*) AS cnt FROM bank_payments WHERE {where}",
+                        tuple(params))["cnt"]
     rows = execute_query(
-        f"SELECT * FROM TXN.BANK_PAYMENTS WHERE {where} ORDER BY PAYMENT_DATE DESC, PAYMENT_NO DESC LIMIT %s OFFSET %s",
-        tuple(params + [limit, offset]), schema="TXN"
+        f"SELECT * FROM bank_payments WHERE {where} ORDER BY payment_date DESC, payment_no DESC LIMIT %s OFFSET %s",
+        tuple(params + [limit, offset])
     )
-    return PaginatedResponse(data=[{k.lower(): v for k, v in r.items()} for r in rows],
-                             total=total, page=page, limit=limit,
+    return PaginatedResponse(data=rows, total=total, page=page, limit=limit,
                              total_pages=math.ceil(total / limit) if total > 0 else 1)
 
 
 @bank_payments_router.get("/{payment_id}")
 async def get_bank_payment(payment_id: int, current_user: UserResponse = Depends(get_current_active_user)):
-    row = execute_one("SELECT * FROM TXN.BANK_PAYMENTS WHERE PAYMENT_ID = %s", (payment_id,), schema="TXN")
+    row = execute_one("SELECT * FROM bank_payments WHERE payment_id = %s", (payment_id,))
     if not row:
         raise HTTPException(status_code=404, detail="Payment not found")
-    return {k.lower(): v for k, v in row.items()}
+    return row
 
 
 @bank_payments_router.post("", status_code=201)
 async def create_bank_payment(payload: dict, current_user: UserResponse = Depends(get_current_active_user)):
     row = execute_one(
-        """INSERT INTO TXN.BANK_PAYMENTS (PAYMENT_NO, PAYMENT_DATE, BANK_ACCOUNT_ID, BANK_NAME,
-           PAYEE_ID, PAYEE_NAME, AMOUNT, CURRENCY, EXCHANGE_RATE, BASE_AMOUNT,
-           PAYMENT_METHOD, REFERENCE_NO, NARRATION, STATUS, CREATED_BY)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING PAYMENT_ID""",
+        """INSERT INTO bank_payments (payment_no, payment_date, bank_account_id, bank_name,
+           payee_id, payee_name, amount, currency, exchange_rate, base_amount,
+           payment_method, reference_no, narration, status, created_by)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING payment_id""",
         (payload["payment_no"], payload["payment_date"], payload.get("bank_account_id"),
          payload.get("bank_name"), payload.get("payee_id"), payload.get("payee_name"),
          payload["amount"], payload.get("currency", "USD"), payload.get("exchange_rate", 1.0),
          payload.get("base_amount"), payload.get("payment_method"), payload.get("reference_no"),
-         payload.get("narration"), payload.get("status", "DRAFT"), current_user.user_id),
-        schema="TXN"
+         payload.get("narration"), payload.get("status", "DRAFT"), current_user.user_id)
     )
-    return {"payment_id": row["PAYMENT_ID"] if row else None, "message": "Payment created"}
+    return {"payment_id": row["payment_id"] if row else None, "message": "Payment created"}
 
 
 @bank_payments_router.put("/{payment_id}", response_model=MessageResponse)
 async def update_bank_payment(payment_id: int, payload: dict, current_user: UserResponse = Depends(get_current_active_user)):
     execute_write(
-        """UPDATE TXN.BANK_PAYMENTS SET BANK_NAME=%s, PAYEE_NAME=%s, AMOUNT=%s, STATUS=%s,
-           NARRATION=%s, UPDATED_AT=CURRENT_TIMESTAMP() WHERE PAYMENT_ID=%s""",
+        """UPDATE bank_payments SET bank_name=%s, payee_name=%s, amount=%s, status=%s,
+           narration=%s, updated_at=NOW() WHERE payment_id=%s""",
         (payload.get("bank_name"), payload.get("payee_name"), payload.get("amount"),
-         payload.get("status"), payload.get("narration"), payment_id), schema="TXN"
+         payload.get("status"), payload.get("narration"), payment_id)
     )
     return MessageResponse(message="Payment updated")
 
@@ -218,39 +211,37 @@ async def list_bank_receipts(
     conditions = ["1=1"]
     params = []
     if search:
-        conditions.append("(RECEIPT_NO ILIKE %s OR PAYER_NAME ILIKE %s)")
+        conditions.append("(receipt_no ILIKE %s OR payer_name ILIKE %s)")
         params.extend([f"%{search}%", f"%{search}%"])
     if status:
-        conditions.append("STATUS = %s")
+        conditions.append("status = %s")
         params.append(status)
     where = " AND ".join(conditions)
     offset = (page - 1) * limit
-    total = execute_one(f"SELECT COUNT(*) AS CNT FROM TXN.BANK_RECEIPTS WHERE {where}",
-                        tuple(params), schema="TXN")["CNT"]
+    total = execute_one(f"SELECT COUNT(*) AS cnt FROM bank_receipts WHERE {where}",
+                        tuple(params))["cnt"]
     rows = execute_query(
-        f"SELECT * FROM TXN.BANK_RECEIPTS WHERE {where} ORDER BY RECEIPT_DATE DESC LIMIT %s OFFSET %s",
-        tuple(params + [limit, offset]), schema="TXN"
+        f"SELECT * FROM bank_receipts WHERE {where} ORDER BY receipt_date DESC LIMIT %s OFFSET %s",
+        tuple(params + [limit, offset])
     )
-    return PaginatedResponse(data=[{k.lower(): v for k, v in r.items()} for r in rows],
-                             total=total, page=page, limit=limit,
+    return PaginatedResponse(data=rows, total=total, page=page, limit=limit,
                              total_pages=math.ceil(total / limit) if total > 0 else 1)
 
 
 @bank_receipts_router.post("", status_code=201)
 async def create_bank_receipt(payload: dict, current_user: UserResponse = Depends(get_current_active_user)):
     row = execute_one(
-        """INSERT INTO TXN.BANK_RECEIPTS (RECEIPT_NO, RECEIPT_DATE, BANK_ACCOUNT_ID, BANK_NAME,
-           PAYER_ID, PAYER_NAME, AMOUNT, CURRENCY, EXCHANGE_RATE, BASE_AMOUNT,
-           RECEIPT_METHOD, REFERENCE_NO, NARRATION, STATUS, CREATED_BY)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING RECEIPT_ID""",
+        """INSERT INTO bank_receipts (receipt_no, receipt_date, bank_account_id, bank_name,
+           payer_id, payer_name, amount, currency, exchange_rate, base_amount,
+           receipt_method, reference_no, narration, status, created_by)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING receipt_id""",
         (payload["receipt_no"], payload["receipt_date"], payload.get("bank_account_id"),
          payload.get("bank_name"), payload.get("payer_id"), payload.get("payer_name"),
          payload["amount"], payload.get("currency", "USD"), payload.get("exchange_rate", 1.0),
          payload.get("base_amount"), payload.get("receipt_method"), payload.get("reference_no"),
-         payload.get("narration"), payload.get("status", "DRAFT"), current_user.user_id),
-        schema="TXN"
+         payload.get("narration"), payload.get("status", "DRAFT"), current_user.user_id)
     )
-    return {"receipt_id": row["RECEIPT_ID"] if row else None, "message": "Receipt created"}
+    return {"receipt_id": row["receipt_id"] if row else None, "message": "Receipt created"}
 
 
 # ========================
@@ -268,33 +259,32 @@ async def list_journal_entries(
     conditions = ["1=1"]
     params = []
     if search:
-        conditions.append("(ENTRY_NO ILIKE %s OR DESCRIPTION ILIKE %s)")
+        conditions.append("(entry_no ILIKE %s OR description ILIKE %s)")
         params.extend([f"%{search}%", f"%{search}%"])
     if status:
-        conditions.append("STATUS = %s")
+        conditions.append("status = %s")
         params.append(status)
     where = " AND ".join(conditions)
     offset = (page - 1) * limit
-    total = execute_one(f"SELECT COUNT(*) AS CNT FROM TXN.JOURNAL_ENTRIES WHERE {where}",
-                        tuple(params), schema="TXN")["CNT"]
+    total = execute_one(f"SELECT COUNT(*) AS cnt FROM journal_entries WHERE {where}",
+                        tuple(params))["cnt"]
     rows = execute_query(
-        f"SELECT * FROM TXN.JOURNAL_ENTRIES WHERE {where} ORDER BY ENTRY_DATE DESC LIMIT %s OFFSET %s",
-        tuple(params + [limit, offset]), schema="TXN"
+        f"SELECT * FROM journal_entries WHERE {where} ORDER BY entry_date DESC LIMIT %s OFFSET %s",
+        tuple(params + [limit, offset])
     )
-    return PaginatedResponse(data=[{k.lower(): v for k, v in r.items()} for r in rows],
-                             total=total, page=page, limit=limit,
+    return PaginatedResponse(data=rows, total=total, page=page, limit=limit,
                              total_pages=math.ceil(total / limit) if total > 0 else 1)
 
 
 @journal_entries_router.get("/{entry_id}")
 async def get_journal_entry(entry_id: int, current_user: UserResponse = Depends(get_current_active_user)):
-    row = execute_one("SELECT * FROM TXN.JOURNAL_ENTRIES WHERE ENTRY_ID = %s", (entry_id,), schema="TXN")
+    row = execute_one("SELECT * FROM journal_entries WHERE entry_id = %s", (entry_id,))
     if not row:
         raise HTTPException(status_code=404, detail="Entry not found")
-    lines = execute_query("SELECT * FROM TXN.JOURNAL_LINES WHERE ENTRY_ID = %s ORDER BY LINE_NO",
-                          (entry_id,), schema="TXN")
-    result = {k.lower(): v for k, v in row.items()}
-    result["lines"] = [{k.lower(): v for k, v in l.items()} for l in lines]
+    lines = execute_query("SELECT * FROM journal_lines WHERE entry_id = %s ORDER BY line_no",
+                          (entry_id,))
+    result = dict(row)
+    result["lines"] = lines
     return result
 
 
@@ -304,24 +294,22 @@ async def create_journal_entry(payload: dict, current_user: UserResponse = Depen
     total_debit = sum(l.get("debit_amount", 0) for l in lines)
     total_credit = sum(l.get("credit_amount", 0) for l in lines)
     row = execute_one(
-        """INSERT INTO TXN.JOURNAL_ENTRIES (ENTRY_NO, ENTRY_DATE, ENTRY_TYPE, DESCRIPTION,
-           TOTAL_DEBIT, TOTAL_CREDIT, STATUS, CREATED_BY)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING ENTRY_ID""",
+        """INSERT INTO journal_entries (entry_no, entry_date, entry_type, description,
+           total_debit, total_credit, status, created_by)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING entry_id""",
         (payload["entry_no"], payload["entry_date"], payload.get("entry_type", "STANDARD"),
          payload.get("description"), total_debit, total_credit,
-         payload.get("status", "DRAFT"), current_user.user_id),
-        schema="TXN"
+         payload.get("status", "DRAFT"), current_user.user_id)
     )
-    entry_id = row["ENTRY_ID"] if row else None
+    entry_id = row["entry_id"] if row else None
     for i, line in enumerate(lines, 1):
         execute_write(
-            """INSERT INTO TXN.JOURNAL_LINES (ENTRY_ID, LINE_NO, ACCOUNT_ID, ACCOUNT_CODE,
-               ACCOUNT_NAME, DEBIT_AMOUNT, CREDIT_AMOUNT, CURRENCY, NARRATION)
+            """INSERT INTO journal_lines (entry_id, line_no, account_id, account_code,
+               account_name, debit_amount, credit_amount, currency, narration)
                VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
             (entry_id, i, line.get("account_id"), line.get("account_code"),
              line.get("account_name"), line.get("debit_amount", 0), line.get("credit_amount", 0),
-             line.get("currency", "USD"), line.get("narration")),
-            schema="TXN"
+             line.get("currency", "USD"), line.get("narration"))
         )
     return {"entry_id": entry_id, "message": "Journal entry created"}
 
@@ -341,39 +329,37 @@ async def list_purchase_bills(
     conditions = ["1=1"]
     params = []
     if search:
-        conditions.append("(BILL_NO ILIKE %s OR VENDOR_NAME ILIKE %s OR VENDOR_INVOICE_NO ILIKE %s)")
+        conditions.append("(bill_no ILIKE %s OR vendor_name ILIKE %s OR vendor_invoice_no ILIKE %s)")
         params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
     if status:
-        conditions.append("STATUS = %s")
+        conditions.append("status = %s")
         params.append(status)
     where = " AND ".join(conditions)
     offset = (page - 1) * limit
-    total = execute_one(f"SELECT COUNT(*) AS CNT FROM TXN.PURCHASE_BILLS WHERE {where}",
-                        tuple(params), schema="TXN")["CNT"]
+    total = execute_one(f"SELECT COUNT(*) AS cnt FROM purchase_bills WHERE {where}",
+                        tuple(params))["cnt"]
     rows = execute_query(
-        f"SELECT * FROM TXN.PURCHASE_BILLS WHERE {where} ORDER BY BILL_DATE DESC LIMIT %s OFFSET %s",
-        tuple(params + [limit, offset]), schema="TXN"
+        f"SELECT * FROM purchase_bills WHERE {where} ORDER BY bill_date DESC LIMIT %s OFFSET %s",
+        tuple(params + [limit, offset])
     )
-    return PaginatedResponse(data=[{k.lower(): v for k, v in r.items()} for r in rows],
-                             total=total, page=page, limit=limit,
+    return PaginatedResponse(data=rows, total=total, page=page, limit=limit,
                              total_pages=math.ceil(total / limit) if total > 0 else 1)
 
 
 @purchase_bills_router.post("", status_code=201)
 async def create_purchase_bill(payload: dict, current_user: UserResponse = Depends(get_current_active_user)):
     row = execute_one(
-        """INSERT INTO TXN.PURCHASE_BILLS (BILL_NO, BILL_DATE, VENDOR_ID, VENDOR_NAME,
-           VENDOR_INVOICE_NO, VENDOR_INV_DATE, AMOUNT, TAX_AMOUNT, TOTAL_AMOUNT,
-           CURRENCY, DUE_DATE, JOB_ID, STATUS, REMARKS, CREATED_BY)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING BILL_ID""",
+        """INSERT INTO purchase_bills (bill_no, bill_date, vendor_id, vendor_name,
+           vendor_invoice_no, vendor_inv_date, amount, tax_amount, total_amount,
+           currency, due_date, job_id, status, remarks, created_by)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING bill_id""",
         (payload["bill_no"], payload["bill_date"], payload.get("vendor_id"),
          payload.get("vendor_name"), payload.get("vendor_invoice_no"), payload.get("vendor_inv_date"),
          payload.get("amount"), payload.get("tax_amount", 0), payload.get("total_amount"),
          payload.get("currency", "USD"), payload.get("due_date"), payload.get("job_id"),
-         payload.get("status", "DRAFT"), payload.get("remarks"), current_user.user_id),
-        schema="TXN"
+         payload.get("status", "DRAFT"), payload.get("remarks"), current_user.user_id)
     )
-    return {"bill_id": row["BILL_ID"] if row else None, "message": "Purchase bill created"}
+    return {"bill_id": row["bill_id"] if row else None, "message": "Purchase bill created"}
 
 
 # ========================
@@ -391,36 +377,34 @@ async def list_debit_notes(
     conditions = ["1=1"]
     params = []
     if search:
-        conditions.append("(DN_NO ILIKE %s OR PARTY_NAME ILIKE %s)")
+        conditions.append("(dn_no ILIKE %s OR party_name ILIKE %s)")
         params.extend([f"%{search}%", f"%{search}%"])
     if status:
-        conditions.append("STATUS = %s")
+        conditions.append("status = %s")
         params.append(status)
     where = " AND ".join(conditions)
     offset = (page - 1) * limit
-    total = execute_one(f"SELECT COUNT(*) AS CNT FROM TXN.GENERAL_DEBIT_NOTES WHERE {where}",
-                        tuple(params), schema="TXN")["CNT"]
+    total = execute_one(f"SELECT COUNT(*) AS cnt FROM general_debit_notes WHERE {where}",
+                        tuple(params))["cnt"]
     rows = execute_query(
-        f"SELECT * FROM TXN.GENERAL_DEBIT_NOTES WHERE {where} ORDER BY DN_DATE DESC LIMIT %s OFFSET %s",
-        tuple(params + [limit, offset]), schema="TXN"
+        f"SELECT * FROM general_debit_notes WHERE {where} ORDER BY dn_date DESC LIMIT %s OFFSET %s",
+        tuple(params + [limit, offset])
     )
-    return PaginatedResponse(data=[{k.lower(): v for k, v in r.items()} for r in rows],
-                             total=total, page=page, limit=limit,
+    return PaginatedResponse(data=rows, total=total, page=page, limit=limit,
                              total_pages=math.ceil(total / limit) if total > 0 else 1)
 
 
 @debit_notes_router.post("", status_code=201)
 async def create_debit_note(payload: dict, current_user: UserResponse = Depends(get_current_active_user)):
     row = execute_one(
-        """INSERT INTO TXN.GENERAL_DEBIT_NOTES (DN_NO, DN_DATE, PARTY_ID, PARTY_NAME,
-           AMOUNT, CURRENCY, REASON, JOB_ID, STATUS, CREATED_BY)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING DN_ID""",
+        """INSERT INTO general_debit_notes (dn_no, dn_date, party_id, party_name,
+           amount, currency, reason, job_id, status, created_by)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING dn_id""",
         (payload["dn_no"], payload["dn_date"], payload.get("party_id"), payload.get("party_name"),
          payload["amount"], payload.get("currency", "USD"), payload.get("reason"),
-         payload.get("job_id"), payload.get("status", "DRAFT"), current_user.user_id),
-        schema="TXN"
+         payload.get("job_id"), payload.get("status", "DRAFT"), current_user.user_id)
     )
-    return {"dn_id": row["DN_ID"] if row else None, "message": "Debit note created"}
+    return {"dn_id": row["dn_id"] if row else None, "message": "Debit note created"}
 
 
 # ========================
@@ -438,39 +422,37 @@ async def list_customs_exports(
     conditions = ["1=1"]
     params = []
     if search:
-        conditions.append("(EXPORT_NO ILIKE %s OR EXPORTER_NAME ILIKE %s)")
+        conditions.append("(export_no ILIKE %s OR exporter_name ILIKE %s)")
         params.extend([f"%{search}%", f"%{search}%"])
     if status:
-        conditions.append("STATUS = %s")
+        conditions.append("status = %s")
         params.append(status)
     where = " AND ".join(conditions)
     offset = (page - 1) * limit
-    total = execute_one(f"SELECT COUNT(*) AS CNT FROM TXN.CUSTOMS_EXPORT WHERE {where}",
-                        tuple(params), schema="TXN")["CNT"]
+    total = execute_one(f"SELECT COUNT(*) AS cnt FROM customs_export WHERE {where}",
+                        tuple(params))["cnt"]
     rows = execute_query(
-        f"SELECT * FROM TXN.CUSTOMS_EXPORT WHERE {where} ORDER BY EXPORT_DATE DESC LIMIT %s OFFSET %s",
-        tuple(params + [limit, offset]), schema="TXN"
+        f"SELECT * FROM customs_export WHERE {where} ORDER BY export_date DESC LIMIT %s OFFSET %s",
+        tuple(params + [limit, offset])
     )
-    return PaginatedResponse(data=[{k.lower(): v for k, v in r.items()} for r in rows],
-                             total=total, page=page, limit=limit,
+    return PaginatedResponse(data=rows, total=total, page=page, limit=limit,
                              total_pages=math.ceil(total / limit) if total > 0 else 1)
 
 
 @customs_export_router.post("", status_code=201)
 async def create_customs_export(payload: dict, current_user: UserResponse = Depends(get_current_active_user)):
     row = execute_one(
-        """INSERT INTO TXN.CUSTOMS_EXPORT (EXPORT_NO, EXPORT_DATE, EXPORTER_ID, EXPORTER_NAME,
-           CONSIGNEE_ID, CONSIGNEE_NAME, COMMODITY_ID, COMMODITY_DESC, HS_CODE,
-           COUNTRY_OF_ORIGIN, DESTINATION_COUNTRY, TRANSPORT_MODE, INCOTERMS,
-           TOTAL_VALUE, CURRENCY, GROSS_WEIGHT, PACKAGES, STATUS, REMARKS, CREATED_BY)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING EXPORT_ID""",
+        """INSERT INTO customs_export (export_no, export_date, exporter_id, exporter_name,
+           consignee_id, consignee_name, commodity_id, commodity_desc, hs_code,
+           country_of_origin, destination_country, transport_mode, incoterms,
+           total_value, currency, gross_weight, packages, status, remarks, created_by)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING export_id""",
         (payload["export_no"], payload["export_date"], payload.get("exporter_id"),
          payload.get("exporter_name"), payload.get("consignee_id"), payload.get("consignee_name"),
          payload.get("commodity_id"), payload.get("commodity_desc"), payload.get("hs_code"),
          payload.get("country_of_origin"), payload.get("destination_country"),
          payload.get("transport_mode"), payload.get("incoterms"), payload.get("total_value"),
          payload.get("currency", "USD"), payload.get("gross_weight"), payload.get("packages"),
-         payload.get("status", "DRAFT"), payload.get("remarks"), current_user.user_id),
-        schema="TXN"
+         payload.get("status", "DRAFT"), payload.get("remarks"), current_user.user_id)
     )
-    return {"export_id": row["EXPORT_ID"] if row else None, "message": "Customs export created"}
+    return {"export_id": row["export_id"] if row else None, "message": "Customs export created"}

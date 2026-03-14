@@ -21,15 +21,8 @@ class Settings(BaseSettings):
     def cors_origins_list(self) -> List[str]:
         return [s.strip() for s in self.CORS_ORIGINS.split(",") if s.strip()]
 
-    # Snowflake
-    SNOWFLAKE_ACCOUNT: str
-    SNOWFLAKE_USER: str
-    SNOWFLAKE_PASSWORD: str = ""
-    SNOWFLAKE_AUTHENTICATOR: str = "snowflake"
-    SNOWFLAKE_WAREHOUSE: str = "CARGOZEN_WH"
-    SNOWFLAKE_DATABASE: str = "CARGOZEN_DB"
-    SNOWFLAKE_SCHEMA: str = "AUTH"
-    SNOWFLAKE_ROLE: str = "ACCOUNTADMIN"
+    # Database (Supabase / PostgreSQL)
+    DATABASE_URL: str
 
     # JWT
     JWT_SECRET_KEY: str = "dev-secret-key"
@@ -40,6 +33,7 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
+        extra = "ignore"
 
 
 settings = Settings()

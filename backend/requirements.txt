@@ -1,11 +1,10 @@
 fastapi
 uvicorn[standard]
-snowflake-connector-python
+psycopg2-binary
 python-jose[cryptography]
-passlib[bcrypt]
+bcrypt
 pydantic
 pydantic-settings
 python-multipart
 python-dotenv
-httpx
 pytz

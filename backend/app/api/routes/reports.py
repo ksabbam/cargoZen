@@ -13,53 +13,46 @@ async def dashboard_summary(current_user: UserResponse = Depends(get_current_act
     stats = {}
 
     # Active import jobs
-    row = execute_one("SELECT COUNT(*) AS CNT FROM TXN.IMPORT_JOBS WHERE STATUS IN ('OPEN', 'IN_PROGRESS')",
-                      schema="TXN")
-    stats["active_import_jobs"] = row["CNT"] if row else 0
+    row = execute_one("SELECT COUNT(*) AS cnt FROM import_jobs WHERE status IN ('OPEN', 'IN_PROGRESS')")
+    stats["active_import_jobs"] = row["cnt"] if row else 0
 
     # Today's payments
     row = execute_one(
-        "SELECT COALESCE(SUM(AMOUNT), 0) AS TOTAL FROM TXN.BANK_PAYMENTS WHERE PAYMENT_DATE = CURRENT_DATE()",
-        schema="TXN"
+        "SELECT COALESCE(SUM(amount), 0) AS total FROM bank_payments WHERE payment_date = CURRENT_DATE"
     )
-    stats["todays_payments"] = float(row["TOTAL"]) if row else 0
+    stats["todays_payments"] = float(row["total"]) if row else 0
 
     # Today's receipts
     row = execute_one(
-        "SELECT COALESCE(SUM(AMOUNT), 0) AS TOTAL FROM TXN.BANK_RECEIPTS WHERE RECEIPT_DATE = CURRENT_DATE()",
-        schema="TXN"
+        "SELECT COALESCE(SUM(amount), 0) AS total FROM bank_receipts WHERE receipt_date = CURRENT_DATE"
     )
-    stats["todays_receipts"] = float(row["TOTAL"]) if row else 0
+    stats["todays_receipts"] = float(row["total"]) if row else 0
 
     # Pending approvals
     row = execute_one(
-        "SELECT COUNT(*) AS CNT FROM ADMIN.ORGANIZATIONS WHERE APPROVAL_STATUS = 'PENDING'",
-        schema="ADMIN"
+        "SELECT COUNT(*) AS cnt FROM organizations WHERE approval_status = 'PENDING'"
     )
-    stats["pending_approvals"] = row["CNT"] if row else 0
+    stats["pending_approvals"] = row["cnt"] if row else 0
 
     # Total organizations
-    row = execute_one("SELECT COUNT(*) AS CNT FROM ADMIN.ORGANIZATIONS WHERE IS_ACTIVE = TRUE",
-                      schema="ADMIN")
-    stats["total_organizations"] = row["CNT"] if row else 0
+    row = execute_one("SELECT COUNT(*) AS cnt FROM organizations WHERE is_active = TRUE")
+    stats["total_organizations"] = row["cnt"] if row else 0
 
     # Jobs by transport mode
     rows = execute_query(
-        "SELECT TRANSPORT_MODE, COUNT(*) AS CNT FROM TXN.IMPORT_JOBS GROUP BY TRANSPORT_MODE",
-        schema="TXN"
+        "SELECT transport_mode, COUNT(*) AS cnt FROM import_jobs GROUP BY transport_mode"
     )
-    stats["jobs_by_mode"] = [{k.lower(): v for k, v in r.items()} for r in rows]
+    stats["jobs_by_mode"] = rows
 
     # Recent jobs
     recent_jobs = execute_query(
-        """SELECT j.JOB_NO, j.JOB_DATE, j.TRANSPORT_MODE, j.STATUS,
-                  s.ORG_NAME AS shipper_name
-           FROM TXN.IMPORT_JOBS j
-           LEFT JOIN ADMIN.ORGANIZATIONS s ON j.SHIPPER_ID = s.ORG_ID
-           ORDER BY j.CREATED_AT DESC LIMIT 5""",
-        schema="TXN"
+        """SELECT j.job_no, j.job_date, j.transport_mode, j.status,
+                  s.org_name AS shipper_name
+           FROM import_jobs j
+           LEFT JOIN organizations s ON j.shipper_id = s.org_id
+           ORDER BY j.created_at DESC LIMIT 5"""
     )
-    stats["recent_jobs"] = [{k.lower(): v for k, v in r.items()} for r in recent_jobs]
+    stats["recent_jobs"] = recent_jobs
 
     return stats
 
@@ -75,33 +68,32 @@ async def import_jobs_report(
     conditions = ["1=1"]
     params = []
     if date_from:
-        conditions.append("j.JOB_DATE >= %s")
+        conditions.append("j.job_date >= %s")
         params.append(date_from)
     if date_to:
-        conditions.append("j.JOB_DATE <= %s")
+        conditions.append("j.job_date <= %s")
         params.append(date_to)
     if transport_mode:
-        conditions.append("j.TRANSPORT_MODE = %s")
+        conditions.append("j.transport_mode = %s")
         params.append(transport_mode)
     if status:
-        conditions.append("j.STATUS = %s")
+        conditions.append("j.status = %s")
         params.append(status)
     where = " AND ".join(conditions)
 
     rows = execute_query(
-        f"""SELECT j.JOB_NO, j.JOB_DATE, j.TRANSPORT_MODE, j.BL_NO,
-                   s.ORG_NAME AS shipper, c.ORG_NAME AS consignee,
-                   j.POL, j.POD, j.ETA, j.ATA,
-                   j.GROSS_WEIGHT, j.PACKAGES, j.STATUS
-            FROM TXN.IMPORT_JOBS j
-            LEFT JOIN ADMIN.ORGANIZATIONS s ON j.SHIPPER_ID = s.ORG_ID
-            LEFT JOIN ADMIN.ORGANIZATIONS c ON j.CONSIGNEE_ID = c.ORG_ID
+        f"""SELECT j.job_no, j.job_date, j.transport_mode, j.bl_no,
+                   s.org_name AS shipper, c.org_name AS consignee,
+                   j.pol, j.pod, j.eta, j.ata,
+                   j.gross_weight, j.packages, j.status
+            FROM import_jobs j
+            LEFT JOIN organizations s ON j.shipper_id = s.org_id
+            LEFT JOIN organizations c ON j.consignee_id = c.org_id
             WHERE {where}
-            ORDER BY j.JOB_DATE DESC""",
-        tuple(params), schema="TXN"
+            ORDER BY j.job_date DESC""",
+        tuple(params)
     )
-    return {"data": [{k.lower(): v for k, v in r.items()} for r in rows],
-            "total": len(rows)}
+    return {"data": rows, "total": len(rows)}
 
 
 @router.get("/financial-report")
@@ -113,39 +105,37 @@ async def financial_report(
     conditions = ["1=1"]
     params = []
     if date_from:
-        conditions.append("ENTRY_DATE >= %s")
+        conditions.append("je.entry_date >= %s")
         params.append(date_from)
     if date_to:
-        conditions.append("ENTRY_DATE <= %s")
+        conditions.append("je.entry_date <= %s")
         params.append(date_to)
     where = " AND ".join(conditions)
 
     rows = execute_query(
-        f"""SELECT jl.ACCOUNT_CODE, jl.ACCOUNT_NAME,
-                   SUM(jl.DEBIT_AMOUNT) AS total_debit,
-                   SUM(jl.CREDIT_AMOUNT) AS total_credit
-            FROM TXN.JOURNAL_LINES jl
-            JOIN TXN.JOURNAL_ENTRIES je ON jl.ENTRY_ID = je.ENTRY_ID
-            WHERE je.STATUS = 'POSTED' AND {where}
-            GROUP BY jl.ACCOUNT_CODE, jl.ACCOUNT_NAME
-            ORDER BY jl.ACCOUNT_CODE""",
-        tuple(params), schema="TXN"
+        f"""SELECT jl.account_code, jl.account_name,
+                   SUM(jl.debit_amount) AS total_debit,
+                   SUM(jl.credit_amount) AS total_credit
+            FROM journal_lines jl
+            JOIN journal_entries je ON jl.entry_id = je.entry_id
+            WHERE je.status = 'POSTED' AND {where}
+            GROUP BY jl.account_code, jl.account_name
+            ORDER BY jl.account_code""",
+        tuple(params)
     )
-    return {"data": [{k.lower(): v for k, v in r.items()} for r in rows]}
+    return {"data": rows}
 
 
 @router.get("/ar-aging")
 async def ar_aging_report(current_user: UserResponse = Depends(get_current_active_user)):
-    """Accounts Receivable Aging Report."""
     rows = execute_query(
-        """SELECT o.ORG_NAME AS customer, o.ORG_CODE,
-                  COUNT(pb.BILL_ID) AS bill_count,
-                  SUM(pb.TOTAL_AMOUNT) AS total_amount
-           FROM TXN.PURCHASE_BILLS pb
-           LEFT JOIN ADMIN.ORGANIZATIONS o ON pb.VENDOR_ID = o.ORG_ID
-           WHERE pb.STATUS NOT IN ('PAID', 'CANCELLED')
-           GROUP BY o.ORG_NAME, o.ORG_CODE
-           ORDER BY total_amount DESC""",
-        schema="TXN"
+        """SELECT o.org_name AS customer, o.org_code,
+                  COUNT(pb.bill_id) AS bill_count,
+                  SUM(pb.total_amount) AS total_amount
+           FROM purchase_bills pb
+           LEFT JOIN organizations o ON pb.vendor_id = o.org_id
+           WHERE pb.status NOT IN ('PAID', 'CANCELLED')
+           GROUP BY o.org_name, o.org_code
+           ORDER BY total_amount DESC"""
     )
-    return {"data": [{k.lower(): v for k, v in r.items()} for r in rows]}
+    return {"data": rows}

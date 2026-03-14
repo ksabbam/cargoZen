@@ -4,6 +4,7 @@ from app.api.deps import get_current_active_user
 from app.core.database import execute_query, execute_one, execute_write
 from app.models.schemas import PaginatedResponse, MessageResponse, UserResponse
 import math
+import json
 
 router = APIRouter(tags=["Administration"])
 
@@ -22,60 +23,56 @@ async def list_org_groups(
     conditions = ["1=1"]
     params = []
     if search:
-        conditions.append("(GROUP_CODE ILIKE %s OR GROUP_NAME ILIKE %s)")
+        conditions.append("(group_code ILIKE %s OR group_name ILIKE %s)")
         params.extend([f"%{search}%", f"%{search}%"])
     if is_active is not None:
-        conditions.append("IS_ACTIVE = %s")
+        conditions.append("is_active = %s")
         params.append(is_active)
     where = " AND ".join(conditions)
     offset = (page - 1) * limit
 
-    total = execute_one(f"SELECT COUNT(*) AS CNT FROM ADMIN.ORGANIZATION_GROUPS WHERE {where}",
-                        tuple(params), schema="ADMIN")["CNT"]
+    total = execute_one(f"SELECT COUNT(*) AS cnt FROM organization_groups WHERE {where}",
+                        tuple(params))["cnt"]
     rows = execute_query(
-        f"SELECT * FROM ADMIN.ORGANIZATION_GROUPS WHERE {where} ORDER BY GROUP_NAME LIMIT %s OFFSET %s",
-        tuple(params + [limit, offset]), schema="ADMIN"
+        f"SELECT * FROM organization_groups WHERE {where} ORDER BY group_name LIMIT %s OFFSET %s",
+        tuple(params + [limit, offset])
     )
-    return PaginatedResponse(data=[{k.lower(): v for k, v in r.items()} for r in rows],
-                             total=total, page=page, limit=limit,
+    return PaginatedResponse(data=rows, total=total, page=page, limit=limit,
                              total_pages=math.ceil(total / limit) if total > 0 else 1)
 
 
 @org_groups_router.get("/{group_id}")
 async def get_org_group(group_id: int, current_user: UserResponse = Depends(get_current_active_user)):
-    row = execute_one("SELECT * FROM ADMIN.ORGANIZATION_GROUPS WHERE GROUP_ID = %s",
-                      (group_id,), schema="ADMIN")
+    row = execute_one("SELECT * FROM organization_groups WHERE group_id = %s", (group_id,))
     if not row:
         raise HTTPException(status_code=404, detail="Group not found")
-    return {k.lower(): v for k, v in row.items()}
+    return row
 
 
 @org_groups_router.post("", status_code=201)
 async def create_org_group(payload: dict, current_user: UserResponse = Depends(get_current_active_user)):
     row = execute_one(
-        """INSERT INTO ADMIN.ORGANIZATION_GROUPS (GROUP_CODE, GROUP_NAME, GROUP_TYPE, DESCRIPTION, IS_ACTIVE, CREATED_BY)
-           VALUES (%s,%s,%s,%s,%s,%s) RETURNING GROUP_ID""",
+        """INSERT INTO organization_groups (group_code, group_name, group_type, description, is_active, created_by)
+           VALUES (%s,%s,%s,%s,%s,%s) RETURNING group_id""",
         (payload["group_code"], payload["group_name"], payload.get("group_type"),
-         payload.get("description"), payload.get("is_active", True), current_user.user_id),
-        schema="ADMIN"
+         payload.get("description"), payload.get("is_active", True), current_user.user_id)
     )
-    return {"group_id": row["GROUP_ID"] if row else None, "message": "Group created"}
+    return {"group_id": row["group_id"] if row else None, "message": "Group created"}
 
 
 @org_groups_router.put("/{group_id}", response_model=MessageResponse)
 async def update_org_group(group_id: int, payload: dict, current_user: UserResponse = Depends(get_current_active_user)):
     execute_write(
-        "UPDATE ADMIN.ORGANIZATION_GROUPS SET GROUP_NAME=%s, GROUP_TYPE=%s, DESCRIPTION=%s, IS_ACTIVE=%s, UPDATED_AT=CURRENT_TIMESTAMP() WHERE GROUP_ID=%s",
+        "UPDATE organization_groups SET group_name=%s, group_type=%s, description=%s, is_active=%s, updated_at=NOW() WHERE group_id=%s",
         (payload.get("group_name"), payload.get("group_type"), payload.get("description"),
-         payload.get("is_active", True), group_id), schema="ADMIN"
+         payload.get("is_active", True), group_id)
     )
     return MessageResponse(message="Group updated")
 
 
 @org_groups_router.delete("/{group_id}", response_model=MessageResponse)
 async def delete_org_group(group_id: int, current_user: UserResponse = Depends(get_current_active_user)):
-    execute_write("UPDATE ADMIN.ORGANIZATION_GROUPS SET IS_ACTIVE=FALSE WHERE GROUP_ID=%s",
-                  (group_id,), schema="ADMIN")
+    execute_write("UPDATE organization_groups SET is_active=FALSE WHERE group_id=%s", (group_id,))
     return MessageResponse(message="Group deactivated")
 
 
@@ -94,78 +91,75 @@ async def list_airlines(
     conditions = ["1=1"]
     params = []
     if search:
-        conditions.append("(AIRLINE_CODE ILIKE %s OR AIRLINE_NAME ILIKE %s OR IATA_CODE ILIKE %s)")
+        conditions.append("(airline_code ILIKE %s OR airline_name ILIKE %s OR iata_code ILIKE %s)")
         params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
     if is_active is not None:
-        conditions.append("IS_ACTIVE = %s")
+        conditions.append("is_active = %s")
         params.append(is_active)
     where = " AND ".join(conditions)
     offset = (page - 1) * limit
 
-    total = execute_one(f"SELECT COUNT(*) AS CNT FROM ADMIN.AIRLINES WHERE {where}",
-                        tuple(params), schema="ADMIN")["CNT"]
+    total = execute_one(f"SELECT COUNT(*) AS cnt FROM airlines WHERE {where}",
+                        tuple(params))["cnt"]
     rows = execute_query(
-        f"SELECT * FROM ADMIN.AIRLINES WHERE {where} ORDER BY AIRLINE_NAME LIMIT %s OFFSET %s",
-        tuple(params + [limit, offset]), schema="ADMIN"
+        f"SELECT * FROM airlines WHERE {where} ORDER BY airline_name LIMIT %s OFFSET %s",
+        tuple(params + [limit, offset])
     )
-    return PaginatedResponse(data=[{k.lower(): v for k, v in r.items()} for r in rows],
-                             total=total, page=page, limit=limit,
+    return PaginatedResponse(data=rows, total=total, page=page, limit=limit,
                              total_pages=math.ceil(total / limit) if total > 0 else 1)
 
 
 @airlines_router.get("/search-select", response_model=List[dict])
 async def search_airlines(q: Optional[str] = None, current_user: UserResponse = Depends(get_current_active_user)):
     params = []
-    conditions = ["IS_ACTIVE = TRUE"]
+    conditions = ["is_active = TRUE"]
     if q:
-        conditions.append("(AIRLINE_CODE ILIKE %s OR AIRLINE_NAME ILIKE %s OR IATA_CODE ILIKE %s)")
+        conditions.append("(airline_code ILIKE %s OR airline_name ILIKE %s OR iata_code ILIKE %s)")
         params.extend([f"%{q}%", f"%{q}%", f"%{q}%"])
     rows = execute_query(
-        f"SELECT AIRLINE_ID AS id, AIRLINE_CODE AS code, AIRLINE_NAME AS name, IATA_CODE AS iata_code "
-        f"FROM ADMIN.AIRLINES WHERE {' AND '.join(conditions)} LIMIT 50",
-        tuple(params), schema="ADMIN"
+        f"SELECT airline_id AS id, airline_code AS code, airline_name AS name, iata_code "
+        f"FROM airlines WHERE {' AND '.join(conditions)} LIMIT 50",
+        tuple(params)
     )
-    return [{k.lower(): v for k, v in r.items()} for r in rows]
+    return rows
 
 
 @airlines_router.get("/{airline_id}")
 async def get_airline(airline_id: int, current_user: UserResponse = Depends(get_current_active_user)):
-    row = execute_one("SELECT * FROM ADMIN.AIRLINES WHERE AIRLINE_ID = %s", (airline_id,), schema="ADMIN")
+    row = execute_one("SELECT * FROM airlines WHERE airline_id = %s", (airline_id,))
     if not row:
         raise HTTPException(status_code=404, detail="Airline not found")
-    return {k.lower(): v for k, v in row.items()}
+    return row
 
 
 @airlines_router.post("", status_code=201)
 async def create_airline(payload: dict, current_user: UserResponse = Depends(get_current_active_user)):
     row = execute_one(
-        """INSERT INTO ADMIN.AIRLINES (AIRLINE_CODE, IATA_CODE, ICAO_CODE, AIRLINE_NAME, COUNTRY,
-           HEADQUARTERS, PHONE, EMAIL, ALLIANCE, IS_ACTIVE, CREATED_BY)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING AIRLINE_ID""",
+        """INSERT INTO airlines (airline_code, iata_code, icao_code, airline_name, country,
+           headquarters, phone, email, alliance, is_active, created_by)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING airline_id""",
         (payload["airline_code"], payload.get("iata_code"), payload.get("icao_code"),
          payload["airline_name"], payload.get("country"), payload.get("headquarters"),
          payload.get("phone"), payload.get("email"), payload.get("alliance"),
-         payload.get("is_active", True), current_user.user_id),
-        schema="ADMIN"
+         payload.get("is_active", True), current_user.user_id)
     )
-    return {"airline_id": row["AIRLINE_ID"] if row else None, "message": "Airline created"}
+    return {"airline_id": row["airline_id"] if row else None, "message": "Airline created"}
 
 
 @airlines_router.put("/{airline_id}", response_model=MessageResponse)
 async def update_airline(airline_id: int, payload: dict, current_user: UserResponse = Depends(get_current_active_user)):
     execute_write(
-        """UPDATE ADMIN.AIRLINES SET AIRLINE_CODE=%s, IATA_CODE=%s, AIRLINE_NAME=%s, COUNTRY=%s,
-           IS_ACTIVE=%s, UPDATED_AT=CURRENT_TIMESTAMP() WHERE AIRLINE_ID=%s""",
+        """UPDATE airlines SET airline_code=%s, iata_code=%s, airline_name=%s, country=%s,
+           is_active=%s, updated_at=NOW() WHERE airline_id=%s""",
         (payload.get("airline_code"), payload.get("iata_code"), payload.get("airline_name"),
-         payload.get("country"), payload.get("is_active", True), airline_id), schema="ADMIN"
+         payload.get("country"), payload.get("is_active", True), airline_id)
     )
     return MessageResponse(message="Airline updated")
 
 
 @airlines_router.delete("/{airline_id}", response_model=MessageResponse)
 async def delete_airline(airline_id: int, current_user: UserResponse = Depends(get_current_active_user)):
-    execute_write("UPDATE ADMIN.AIRLINES SET IS_ACTIVE=FALSE WHERE AIRLINE_ID=%s",
-                  (airline_id,), schema="ADMIN")
+    execute_write("UPDATE airlines SET is_active=FALSE WHERE airline_id=%s", (airline_id,))
     return MessageResponse(message="Airline deactivated")
 
 
@@ -184,61 +178,57 @@ async def list_shipping_lines(
     conditions = ["1=1"]
     params = []
     if search:
-        conditions.append("(LINE_CODE ILIKE %s OR LINE_NAME ILIKE %s)")
+        conditions.append("(line_code ILIKE %s OR line_name ILIKE %s)")
         params.extend([f"%{search}%", f"%{search}%"])
     if is_active is not None:
-        conditions.append("IS_ACTIVE = %s")
+        conditions.append("is_active = %s")
         params.append(is_active)
     where = " AND ".join(conditions)
     offset = (page - 1) * limit
-    total = execute_one(f"SELECT COUNT(*) AS CNT FROM ADMIN.SHIPPING_LINES WHERE {where}",
-                        tuple(params), schema="ADMIN")["CNT"]
+    total = execute_one(f"SELECT COUNT(*) AS cnt FROM shipping_lines WHERE {where}",
+                        tuple(params))["cnt"]
     rows = execute_query(
-        f"SELECT * FROM ADMIN.SHIPPING_LINES WHERE {where} ORDER BY LINE_NAME LIMIT %s OFFSET %s",
-        tuple(params + [limit, offset]), schema="ADMIN"
+        f"SELECT * FROM shipping_lines WHERE {where} ORDER BY line_name LIMIT %s OFFSET %s",
+        tuple(params + [limit, offset])
     )
-    return PaginatedResponse(data=[{k.lower(): v for k, v in r.items()} for r in rows],
-                             total=total, page=page, limit=limit,
+    return PaginatedResponse(data=rows, total=total, page=page, limit=limit,
                              total_pages=math.ceil(total / limit) if total > 0 else 1)
 
 
 @shipping_lines_router.get("/{line_id}")
 async def get_shipping_line(line_id: int, current_user: UserResponse = Depends(get_current_active_user)):
-    row = execute_one("SELECT * FROM ADMIN.SHIPPING_LINES WHERE LINE_ID = %s", (line_id,), schema="ADMIN")
+    row = execute_one("SELECT * FROM shipping_lines WHERE line_id = %s", (line_id,))
     if not row:
         raise HTTPException(status_code=404, detail="Shipping line not found")
-    return {k.lower(): v for k, v in row.items()}
+    return row
 
 
 @shipping_lines_router.post("", status_code=201)
 async def create_shipping_line(payload: dict, current_user: UserResponse = Depends(get_current_active_user)):
     row = execute_one(
-        """INSERT INTO ADMIN.SHIPPING_LINES (LINE_CODE, SCAC_CODE, LINE_NAME, COUNTRY,
-           HEADQUARTERS, PHONE, EMAIL, WEBSITE, IS_ACTIVE, CREATED_BY)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING LINE_ID""",
+        """INSERT INTO shipping_lines (line_code, scac_code, line_name, country,
+           headquarters, phone, email, website, is_active, created_by)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING line_id""",
         (payload["line_code"], payload.get("scac_code"), payload["line_name"],
          payload.get("country"), payload.get("headquarters"), payload.get("phone"),
          payload.get("email"), payload.get("website"), payload.get("is_active", True),
-         current_user.user_id),
-        schema="ADMIN"
+         current_user.user_id)
     )
-    return {"line_id": row["LINE_ID"] if row else None, "message": "Shipping line created"}
+    return {"line_id": row["line_id"] if row else None, "message": "Shipping line created"}
 
 
 @shipping_lines_router.put("/{line_id}", response_model=MessageResponse)
 async def update_shipping_line(line_id: int, payload: dict, current_user: UserResponse = Depends(get_current_active_user)):
     execute_write(
-        "UPDATE ADMIN.SHIPPING_LINES SET LINE_NAME=%s, COUNTRY=%s, IS_ACTIVE=%s, UPDATED_AT=CURRENT_TIMESTAMP() WHERE LINE_ID=%s",
-        (payload.get("line_name"), payload.get("country"), payload.get("is_active", True), line_id),
-        schema="ADMIN"
+        "UPDATE shipping_lines SET line_name=%s, country=%s, is_active=%s, updated_at=NOW() WHERE line_id=%s",
+        (payload.get("line_name"), payload.get("country"), payload.get("is_active", True), line_id)
     )
     return MessageResponse(message="Shipping line updated")
 
 
 @shipping_lines_router.delete("/{line_id}", response_model=MessageResponse)
 async def delete_shipping_line(line_id: int, current_user: UserResponse = Depends(get_current_active_user)):
-    execute_write("UPDATE ADMIN.SHIPPING_LINES SET IS_ACTIVE=FALSE WHERE LINE_ID=%s",
-                  (line_id,), schema="ADMIN")
+    execute_write("UPDATE shipping_lines SET is_active=FALSE WHERE line_id=%s", (line_id,))
     return MessageResponse(message="Shipping line deactivated")
 
 
@@ -258,68 +248,65 @@ async def list_charges(
     conditions = ["1=1"]
     params = []
     if search:
-        conditions.append("(CHARGE_CODE ILIKE %s OR CHARGE_NAME ILIKE %s)")
+        conditions.append("(charge_code ILIKE %s OR charge_name ILIKE %s)")
         params.extend([f"%{search}%", f"%{search}%"])
     if charge_type:
-        conditions.append("CHARGE_TYPE = %s")
+        conditions.append("charge_type = %s")
         params.append(charge_type)
     if applicable_for:
-        conditions.append("(APPLICABLE_FOR = %s OR APPLICABLE_FOR = 'BOTH')")
+        conditions.append("(applicable_for = %s OR applicable_for = 'BOTH')")
         params.append(applicable_for)
     if is_active is not None:
-        conditions.append("IS_ACTIVE = %s")
+        conditions.append("is_active = %s")
         params.append(is_active)
     where = " AND ".join(conditions)
     offset = (page - 1) * limit
-    total = execute_one(f"SELECT COUNT(*) AS CNT FROM ADMIN.CHARGE_MASTER WHERE {where}",
-                        tuple(params), schema="ADMIN")["CNT"]
+    total = execute_one(f"SELECT COUNT(*) AS cnt FROM charge_master WHERE {where}",
+                        tuple(params))["cnt"]
     rows = execute_query(
-        f"SELECT * FROM ADMIN.CHARGE_MASTER WHERE {where} ORDER BY CHARGE_NAME LIMIT %s OFFSET %s",
-        tuple(params + [limit, offset]), schema="ADMIN"
+        f"SELECT * FROM charge_master WHERE {where} ORDER BY charge_name LIMIT %s OFFSET %s",
+        tuple(params + [limit, offset])
     )
-    return PaginatedResponse(data=[{k.lower(): v for k, v in r.items()} for r in rows],
-                             total=total, page=page, limit=limit,
+    return PaginatedResponse(data=rows, total=total, page=page, limit=limit,
                              total_pages=math.ceil(total / limit) if total > 0 else 1)
 
 
 @charge_master_router.get("/{charge_id}")
 async def get_charge(charge_id: int, current_user: UserResponse = Depends(get_current_active_user)):
-    row = execute_one("SELECT * FROM ADMIN.CHARGE_MASTER WHERE CHARGE_ID = %s", (charge_id,), schema="ADMIN")
+    row = execute_one("SELECT * FROM charge_master WHERE charge_id = %s", (charge_id,))
     if not row:
         raise HTTPException(status_code=404, detail="Charge not found")
-    return {k.lower(): v for k, v in row.items()}
+    return row
 
 
 @charge_master_router.post("", status_code=201)
 async def create_charge(payload: dict, current_user: UserResponse = Depends(get_current_active_user)):
     row = execute_one(
-        """INSERT INTO ADMIN.CHARGE_MASTER (CHARGE_CODE, CHARGE_NAME, CHARGE_TYPE, CHARGE_CATEGORY,
-           APPLICABLE_FOR, GL_ACCOUNT_ID, IS_TAXABLE, UNIT_TYPE, IS_ACTIVE, CREATED_BY)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING CHARGE_ID""",
+        """INSERT INTO charge_master (charge_code, charge_name, charge_type, charge_category,
+           applicable_for, gl_account_id, is_taxable, unit_type, is_active, created_by)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING charge_id""",
         (payload["charge_code"], payload["charge_name"], payload.get("charge_type"),
          payload.get("charge_category"), payload.get("applicable_for"),
          payload.get("gl_account_id"), payload.get("is_taxable", False),
-         payload.get("unit_type"), payload.get("is_active", True), current_user.user_id),
-        schema="ADMIN"
+         payload.get("unit_type"), payload.get("is_active", True), current_user.user_id)
     )
-    return {"charge_id": row["CHARGE_ID"] if row else None, "message": "Charge created"}
+    return {"charge_id": row["charge_id"] if row else None, "message": "Charge created"}
 
 
 @charge_master_router.put("/{charge_id}", response_model=MessageResponse)
 async def update_charge(charge_id: int, payload: dict, current_user: UserResponse = Depends(get_current_active_user)):
     execute_write(
-        """UPDATE ADMIN.CHARGE_MASTER SET CHARGE_NAME=%s, CHARGE_TYPE=%s, CHARGE_CATEGORY=%s,
-           APPLICABLE_FOR=%s, IS_ACTIVE=%s, UPDATED_AT=CURRENT_TIMESTAMP() WHERE CHARGE_ID=%s""",
+        """UPDATE charge_master SET charge_name=%s, charge_type=%s, charge_category=%s,
+           applicable_for=%s, is_active=%s, updated_at=NOW() WHERE charge_id=%s""",
         (payload.get("charge_name"), payload.get("charge_type"), payload.get("charge_category"),
-         payload.get("applicable_for"), payload.get("is_active", True), charge_id), schema="ADMIN"
+         payload.get("applicable_for"), payload.get("is_active", True), charge_id)
     )
     return MessageResponse(message="Charge updated")
 
 
 @charge_master_router.delete("/{charge_id}", response_model=MessageResponse)
 async def delete_charge(charge_id: int, current_user: UserResponse = Depends(get_current_active_user)):
-    execute_write("UPDATE ADMIN.CHARGE_MASTER SET IS_ACTIVE=FALSE WHERE CHARGE_ID=%s",
-                  (charge_id,), schema="ADMIN")
+    execute_write("UPDATE charge_master SET is_active=FALSE WHERE charge_id=%s", (charge_id,))
     return MessageResponse(message="Charge deactivated")
 
 
@@ -338,54 +325,52 @@ async def list_accounts(
     conditions = ["1=1"]
     params = []
     if search:
-        conditions.append("(ACCOUNT_CODE ILIKE %s OR ACCOUNT_NAME ILIKE %s)")
+        conditions.append("(account_code ILIKE %s OR account_name ILIKE %s)")
         params.extend([f"%{search}%", f"%{search}%"])
     if account_type:
-        conditions.append("ACCOUNT_TYPE = %s")
+        conditions.append("account_type = %s")
         params.append(account_type)
     where = " AND ".join(conditions)
     offset = (page - 1) * limit
-    total = execute_one(f"SELECT COUNT(*) AS CNT FROM ADMIN.ACCOUNTS WHERE {where}",
-                        tuple(params), schema="ADMIN")["CNT"]
+    total = execute_one(f"SELECT COUNT(*) AS cnt FROM accounts WHERE {where}",
+                        tuple(params))["cnt"]
     rows = execute_query(
-        f"SELECT * FROM ADMIN.ACCOUNTS WHERE {where} ORDER BY ACCOUNT_CODE LIMIT %s OFFSET %s",
-        tuple(params + [limit, offset]), schema="ADMIN"
+        f"SELECT * FROM accounts WHERE {where} ORDER BY account_code LIMIT %s OFFSET %s",
+        tuple(params + [limit, offset])
     )
-    return PaginatedResponse(data=[{k.lower(): v for k, v in r.items()} for r in rows],
-                             total=total, page=page, limit=limit,
+    return PaginatedResponse(data=rows, total=total, page=page, limit=limit,
                              total_pages=math.ceil(total / limit) if total > 0 else 1)
 
 
 @accounts_router.get("/{account_id}")
 async def get_account(account_id: int, current_user: UserResponse = Depends(get_current_active_user)):
-    row = execute_one("SELECT * FROM ADMIN.ACCOUNTS WHERE ACCOUNT_ID = %s", (account_id,), schema="ADMIN")
+    row = execute_one("SELECT * FROM accounts WHERE account_id = %s", (account_id,))
     if not row:
         raise HTTPException(status_code=404, detail="Account not found")
-    return {k.lower(): v for k, v in row.items()}
+    return row
 
 
 @accounts_router.post("", status_code=201)
 async def create_account(payload: dict, current_user: UserResponse = Depends(get_current_active_user)):
     row = execute_one(
-        """INSERT INTO ADMIN.ACCOUNTS (ACCOUNT_CODE, ACCOUNT_NAME, ACCOUNT_TYPE, ACCOUNT_SUBTYPE,
-           PARENT_ACCOUNT_ID, DESCRIPTION, OPENING_BALANCE, CURRENCY, IS_ACTIVE, CREATED_BY)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING ACCOUNT_ID""",
+        """INSERT INTO accounts (account_code, account_name, account_type, account_subtype,
+           parent_account_id, description, opening_balance, currency, is_active, created_by)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING account_id""",
         (payload["account_code"], payload["account_name"], payload["account_type"],
          payload.get("account_subtype"), payload.get("parent_account_id"),
          payload.get("description"), payload.get("opening_balance", 0),
-         payload.get("currency", "USD"), payload.get("is_active", True), current_user.user_id),
-        schema="ADMIN"
+         payload.get("currency", "USD"), payload.get("is_active", True), current_user.user_id)
     )
-    return {"account_id": row["ACCOUNT_ID"] if row else None, "message": "Account created"}
+    return {"account_id": row["account_id"] if row else None, "message": "Account created"}
 
 
 @accounts_router.put("/{account_id}", response_model=MessageResponse)
 async def update_account(account_id: int, payload: dict, current_user: UserResponse = Depends(get_current_active_user)):
     execute_write(
-        """UPDATE ADMIN.ACCOUNTS SET ACCOUNT_NAME=%s, ACCOUNT_TYPE=%s, ACCOUNT_SUBTYPE=%s,
-           IS_ACTIVE=%s, UPDATED_AT=CURRENT_TIMESTAMP() WHERE ACCOUNT_ID=%s""",
+        """UPDATE accounts SET account_name=%s, account_type=%s, account_subtype=%s,
+           is_active=%s, updated_at=NOW() WHERE account_id=%s""",
         (payload.get("account_name"), payload.get("account_type"), payload.get("account_subtype"),
-         payload.get("is_active", True), account_id), schema="ADMIN"
+         payload.get("is_active", True), account_id)
     )
     return MessageResponse(message="Account updated")
 
@@ -405,61 +390,57 @@ async def list_commodities(
     conditions = ["1=1"]
     params = []
     if search:
-        conditions.append("(COMMODITY_CODE ILIKE %s OR COMMODITY_NAME ILIKE %s OR HS_CODE ILIKE %s)")
+        conditions.append("(commodity_code ILIKE %s OR commodity_name ILIKE %s OR hs_code ILIKE %s)")
         params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
     if is_active is not None:
-        conditions.append("IS_ACTIVE = %s")
+        conditions.append("is_active = %s")
         params.append(is_active)
     where = " AND ".join(conditions)
     offset = (page - 1) * limit
-    total = execute_one(f"SELECT COUNT(*) AS CNT FROM ADMIN.COMMODITIES WHERE {where}",
-                        tuple(params), schema="ADMIN")["CNT"]
+    total = execute_one(f"SELECT COUNT(*) AS cnt FROM commodities WHERE {where}",
+                        tuple(params))["cnt"]
     rows = execute_query(
-        f"SELECT * FROM ADMIN.COMMODITIES WHERE {where} ORDER BY COMMODITY_NAME LIMIT %s OFFSET %s",
-        tuple(params + [limit, offset]), schema="ADMIN"
+        f"SELECT * FROM commodities WHERE {where} ORDER BY commodity_name LIMIT %s OFFSET %s",
+        tuple(params + [limit, offset])
     )
-    return PaginatedResponse(data=[{k.lower(): v for k, v in r.items()} for r in rows],
-                             total=total, page=page, limit=limit,
+    return PaginatedResponse(data=rows, total=total, page=page, limit=limit,
                              total_pages=math.ceil(total / limit) if total > 0 else 1)
 
 
 @commodities_router.get("/{commodity_id}")
 async def get_commodity(commodity_id: int, current_user: UserResponse = Depends(get_current_active_user)):
-    row = execute_one("SELECT * FROM ADMIN.COMMODITIES WHERE COMMODITY_ID = %s", (commodity_id,), schema="ADMIN")
+    row = execute_one("SELECT * FROM commodities WHERE commodity_id = %s", (commodity_id,))
     if not row:
         raise HTTPException(status_code=404, detail="Commodity not found")
-    return {k.lower(): v for k, v in row.items()}
+    return row
 
 
 @commodities_router.post("", status_code=201)
 async def create_commodity(payload: dict, current_user: UserResponse = Depends(get_current_active_user)):
     row = execute_one(
-        """INSERT INTO ADMIN.COMMODITIES (COMMODITY_CODE, COMMODITY_NAME, HS_CODE, COMMODITY_GROUP,
-           IS_DANGEROUS, DANGEROUS_CLASS, UN_NUMBER, DESCRIPTION, IS_ACTIVE, CREATED_BY)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING COMMODITY_ID""",
+        """INSERT INTO commodities (commodity_code, commodity_name, hs_code, commodity_group,
+           is_dangerous, dangerous_class, un_number, description, is_active, created_by)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING commodity_id""",
         (payload["commodity_code"], payload["commodity_name"], payload.get("hs_code"),
          payload.get("commodity_group"), payload.get("is_dangerous", False),
          payload.get("dangerous_class"), payload.get("un_number"), payload.get("description"),
-         payload.get("is_active", True), current_user.user_id),
-        schema="ADMIN"
+         payload.get("is_active", True), current_user.user_id)
     )
-    return {"commodity_id": row["COMMODITY_ID"] if row else None, "message": "Commodity created"}
+    return {"commodity_id": row["commodity_id"] if row else None, "message": "Commodity created"}
 
 
 @commodities_router.put("/{commodity_id}", response_model=MessageResponse)
 async def update_commodity(commodity_id: int, payload: dict, current_user: UserResponse = Depends(get_current_active_user)):
     execute_write(
-        "UPDATE ADMIN.COMMODITIES SET COMMODITY_NAME=%s, HS_CODE=%s, IS_ACTIVE=%s, UPDATED_AT=CURRENT_TIMESTAMP() WHERE COMMODITY_ID=%s",
-        (payload.get("commodity_name"), payload.get("hs_code"), payload.get("is_active", True), commodity_id),
-        schema="ADMIN"
+        "UPDATE commodities SET commodity_name=%s, hs_code=%s, is_active=%s, updated_at=NOW() WHERE commodity_id=%s",
+        (payload.get("commodity_name"), payload.get("hs_code"), payload.get("is_active", True), commodity_id)
     )
     return MessageResponse(message="Commodity updated")
 
 
 @commodities_router.delete("/{commodity_id}", response_model=MessageResponse)
 async def delete_commodity(commodity_id: int, current_user: UserResponse = Depends(get_current_active_user)):
-    execute_write("UPDATE ADMIN.COMMODITIES SET IS_ACTIVE=FALSE WHERE COMMODITY_ID=%s",
-                  (commodity_id,), schema="ADMIN")
+    execute_write("UPDATE commodities SET is_active=FALSE WHERE commodity_id=%s", (commodity_id,))
     return MessageResponse(message="Commodity deactivated")
 
 
@@ -478,55 +459,53 @@ async def list_biz_dims(
     conditions = ["1=1"]
     params = []
     if search:
-        conditions.append("(DIM_CODE ILIKE %s OR DIM_NAME ILIKE %s)")
+        conditions.append("(dim_code ILIKE %s OR dim_name ILIKE %s)")
         params.extend([f"%{search}%", f"%{search}%"])
     if dim_type:
-        conditions.append("DIM_TYPE = %s")
+        conditions.append("dim_type = %s")
         params.append(dim_type)
     where = " AND ".join(conditions)
     offset = (page - 1) * limit
-    total = execute_one(f"SELECT COUNT(*) AS CNT FROM ADMIN.BUSINESS_DIMENSIONS WHERE {where}",
-                        tuple(params), schema="ADMIN")["CNT"]
+    total = execute_one(f"SELECT COUNT(*) AS cnt FROM business_dimensions WHERE {where}",
+                        tuple(params))["cnt"]
     rows = execute_query(
-        f"SELECT * FROM ADMIN.BUSINESS_DIMENSIONS WHERE {where} ORDER BY DIM_NAME LIMIT %s OFFSET %s",
-        tuple(params + [limit, offset]), schema="ADMIN"
+        f"SELECT * FROM business_dimensions WHERE {where} ORDER BY dim_name LIMIT %s OFFSET %s",
+        tuple(params + [limit, offset])
     )
-    return PaginatedResponse(data=[{k.lower(): v for k, v in r.items()} for r in rows],
-                             total=total, page=page, limit=limit,
+    return PaginatedResponse(data=rows, total=total, page=page, limit=limit,
                              total_pages=math.ceil(total / limit) if total > 0 else 1)
 
 
 @biz_dim_router.get("/{dim_id}")
 async def get_biz_dim(dim_id: int, current_user: UserResponse = Depends(get_current_active_user)):
-    row = execute_one("SELECT * FROM ADMIN.BUSINESS_DIMENSIONS WHERE DIM_ID = %s", (dim_id,), schema="ADMIN")
+    row = execute_one("SELECT * FROM business_dimensions WHERE dim_id = %s", (dim_id,))
     if not row:
         raise HTTPException(status_code=404, detail="Not found")
-    return {k.lower(): v for k, v in row.items()}
+    return row
 
 
 @biz_dim_router.post("", status_code=201)
 async def create_biz_dim(payload: dict, current_user: UserResponse = Depends(get_current_active_user)):
     row = execute_one(
-        "INSERT INTO ADMIN.BUSINESS_DIMENSIONS (DIM_CODE, DIM_NAME, DIM_TYPE, IS_ACTIVE, CREATED_BY) VALUES (%s,%s,%s,%s,%s) RETURNING DIM_ID",
+        "INSERT INTO business_dimensions (dim_code, dim_name, dim_type, is_active, created_by) VALUES (%s,%s,%s,%s,%s) RETURNING dim_id",
         (payload["dim_code"], payload["dim_name"], payload.get("dim_type"),
-         payload.get("is_active", True), current_user.user_id), schema="ADMIN"
+         payload.get("is_active", True), current_user.user_id)
     )
-    return {"dim_id": row["DIM_ID"] if row else None, "message": "Created"}
+    return {"dim_id": row["dim_id"] if row else None, "message": "Created"}
 
 
 @biz_dim_router.put("/{dim_id}", response_model=MessageResponse)
 async def update_biz_dim(dim_id: int, payload: dict, current_user: UserResponse = Depends(get_current_active_user)):
     execute_write(
-        "UPDATE ADMIN.BUSINESS_DIMENSIONS SET DIM_NAME=%s, DIM_TYPE=%s, IS_ACTIVE=%s WHERE DIM_ID=%s",
-        (payload.get("dim_name"), payload.get("dim_type"), payload.get("is_active", True), dim_id), schema="ADMIN"
+        "UPDATE business_dimensions SET dim_name=%s, dim_type=%s, is_active=%s WHERE dim_id=%s",
+        (payload.get("dim_name"), payload.get("dim_type"), payload.get("is_active", True), dim_id)
     )
     return MessageResponse(message="Updated")
 
 
 @biz_dim_router.delete("/{dim_id}", response_model=MessageResponse)
 async def delete_biz_dim(dim_id: int, current_user: UserResponse = Depends(get_current_active_user)):
-    execute_write("UPDATE ADMIN.BUSINESS_DIMENSIONS SET IS_ACTIVE=FALSE WHERE DIM_ID=%s",
-                  (dim_id,), schema="ADMIN")
+    execute_write("UPDATE business_dimensions SET is_active=FALSE WHERE dim_id=%s", (dim_id,))
     return MessageResponse(message="Deactivated")
 
 
@@ -545,62 +524,59 @@ async def list_vendor_contracts(
     conditions = ["1=1"]
     params = []
     if search:
-        conditions.append("(CONTRACT_NO ILIKE %s)")
+        conditions.append("(contract_no ILIKE %s)")
         params.append(f"%{search}%")
     if status:
-        conditions.append("STATUS = %s")
+        conditions.append("vc.status = %s")
         params.append(status)
     where = " AND ".join(conditions)
     offset = (page - 1) * limit
-    total = execute_one(f"SELECT COUNT(*) AS CNT FROM ADMIN.VENDOR_CONTRACTS WHERE {where}",
-                        tuple(params), schema="ADMIN")["CNT"]
+    total = execute_one(f"SELECT COUNT(*) AS cnt FROM vendor_contracts vc WHERE {where}",
+                        tuple(params))["cnt"]
     rows = execute_query(
-        f"""SELECT vc.*, o.ORG_NAME AS vendor_name FROM ADMIN.VENDOR_CONTRACTS vc
-            LEFT JOIN ADMIN.ORGANIZATIONS o ON vc.VENDOR_ID = o.ORG_ID
-            WHERE {where} ORDER BY CREATED_AT DESC LIMIT %s OFFSET %s""",
-        tuple(params + [limit, offset]), schema="ADMIN"
+        f"""SELECT vc.*, o.org_name AS vendor_name FROM vendor_contracts vc
+            LEFT JOIN organizations o ON vc.vendor_id = o.org_id
+            WHERE {where} ORDER BY vc.created_at DESC LIMIT %s OFFSET %s""",
+        tuple(params + [limit, offset])
     )
-    return PaginatedResponse(data=[{k.lower(): v for k, v in r.items()} for r in rows],
-                             total=total, page=page, limit=limit,
+    return PaginatedResponse(data=rows, total=total, page=page, limit=limit,
                              total_pages=math.ceil(total / limit) if total > 0 else 1)
 
 
 @vendor_contracts_router.get("/{contract_id}")
 async def get_vendor_contract(contract_id: int, current_user: UserResponse = Depends(get_current_active_user)):
     row = execute_one(
-        """SELECT vc.*, o.ORG_NAME AS vendor_name FROM ADMIN.VENDOR_CONTRACTS vc
-           LEFT JOIN ADMIN.ORGANIZATIONS o ON vc.VENDOR_ID = o.ORG_ID
-           WHERE vc.CONTRACT_ID = %s""",
-        (contract_id,), schema="ADMIN"
+        """SELECT vc.*, o.org_name AS vendor_name FROM vendor_contracts vc
+           LEFT JOIN organizations o ON vc.vendor_id = o.org_id
+           WHERE vc.contract_id = %s""",
+        (contract_id,)
     )
     if not row:
         raise HTTPException(status_code=404, detail="Contract not found")
-    return {k.lower(): v for k, v in row.items()}
+    return row
 
 
 @vendor_contracts_router.post("", status_code=201)
 async def create_vendor_contract(payload: dict, current_user: UserResponse = Depends(get_current_active_user)):
     row = execute_one(
-        """INSERT INTO ADMIN.VENDOR_CONTRACTS (CONTRACT_NO, VENDOR_ID, CONTRACT_TYPE, TRANSPORT_MODE,
-           START_DATE, END_DATE, CURRENCY, REMARKS, STATUS, CREATED_BY)
-           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING CONTRACT_ID""",
+        """INSERT INTO vendor_contracts (contract_no, vendor_id, contract_type, transport_mode,
+           start_date, end_date, currency, remarks, status, created_by)
+           VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING contract_id""",
         (payload["contract_no"], payload["vendor_id"], payload.get("contract_type"),
          payload.get("transport_mode"), payload.get("start_date"), payload.get("end_date"),
          payload.get("currency", "USD"), payload.get("remarks"), payload.get("status", "DRAFT"),
-         current_user.user_id),
-        schema="ADMIN"
+         current_user.user_id)
     )
-    return {"contract_id": row["CONTRACT_ID"] if row else None, "message": "Contract created"}
+    return {"contract_id": row["contract_id"] if row else None, "message": "Contract created"}
 
 
 @vendor_contracts_router.put("/{contract_id}", response_model=MessageResponse)
 async def update_vendor_contract(contract_id: int, payload: dict, current_user: UserResponse = Depends(get_current_active_user)):
     execute_write(
-        """UPDATE ADMIN.VENDOR_CONTRACTS SET CONTRACT_TYPE=%s, TRANSPORT_MODE=%s, START_DATE=%s,
-           END_DATE=%s, STATUS=%s, REMARKS=%s, UPDATED_AT=CURRENT_TIMESTAMP() WHERE CONTRACT_ID=%s""",
+        """UPDATE vendor_contracts SET contract_type=%s, transport_mode=%s, start_date=%s,
+           end_date=%s, status=%s, remarks=%s, updated_at=NOW() WHERE contract_id=%s""",
         (payload.get("contract_type"), payload.get("transport_mode"), payload.get("start_date"),
-         payload.get("end_date"), payload.get("status"), payload.get("remarks"), contract_id),
-        schema="ADMIN"
+         payload.get("end_date"), payload.get("status"), payload.get("remarks"), contract_id)
     )
     return MessageResponse(message="Contract updated")
 
@@ -619,13 +595,13 @@ async def get_settings(
     conditions = ["1=1"]
     params = []
     if group:
-        conditions.append("SETTING_GROUP = %s")
+        conditions.append("setting_group = %s")
         params.append(group)
     rows = execute_query(
-        f"SELECT * FROM ADMIN.SYSTEM_SETTINGS WHERE {' AND '.join(conditions)} ORDER BY SETTING_GROUP, SETTING_KEY",
-        tuple(params), schema="ADMIN"
+        f"SELECT * FROM system_settings WHERE {' AND '.join(conditions)} ORDER BY setting_group, setting_key",
+        tuple(params)
     )
-    return [{k.lower(): v for k, v in r.items()} for r in rows]
+    return rows
 
 
 @system_settings_router.put("/{setting_key}", response_model=MessageResponse)
@@ -633,11 +609,10 @@ async def update_setting(
     setting_key: str, payload: dict,
     current_user: UserResponse = Depends(get_current_active_user)
 ):
-    import json
     value = json.dumps(payload.get("value"))
     execute_write(
-        "UPDATE ADMIN.SYSTEM_SETTINGS SET SETTING_VALUE=PARSE_JSON(%s), UPDATED_BY=%s, UPDATED_AT=CURRENT_TIMESTAMP() WHERE SETTING_KEY=%s",
-        (value, current_user.user_id, setting_key), schema="ADMIN"
+        "UPDATE system_settings SET setting_value=%s::jsonb, updated_by=%s, updated_at=NOW() WHERE setting_key=%s",
+        (value, current_user.user_id, setting_key)
     )
     return MessageResponse(message="Setting updated")
 
@@ -657,76 +632,70 @@ async def list_default_charges(
     conditions = ["1=1"]
     params = []
     if job_type:
-        conditions.append("dc.JOB_TYPE = %s")
+        conditions.append("dc.job_type = %s")
         params.append(job_type)
     if transport_mode:
-        conditions.append("dc.TRANSPORT_MODE = %s")
+        conditions.append("dc.transport_mode = %s")
         params.append(transport_mode)
     where = " AND ".join(conditions)
     offset = (page - 1) * limit
     total = execute_one(
-        f"SELECT COUNT(*) AS CNT FROM ADMIN.DEFAULT_CHARGES dc WHERE {where}",
-        tuple(params), schema="ADMIN"
-    )["CNT"]
+        f"SELECT COUNT(*) AS cnt FROM default_charges dc WHERE {where}",
+        tuple(params)
+    )["cnt"]
     rows = execute_query(
-        f"""SELECT dc.*, cm.CHARGE_CODE, cm.CHARGE_NAME
-            FROM ADMIN.DEFAULT_CHARGES dc
-            LEFT JOIN ADMIN.CHARGE_MASTER cm ON dc.CHARGE_ID = cm.CHARGE_ID
-            WHERE {where} ORDER BY dc.DEFAULT_ID LIMIT %s OFFSET %s""",
-        tuple(params + [limit, offset]), schema="ADMIN"
+        f"""SELECT dc.*, cm.charge_code, cm.charge_name
+            FROM default_charges dc
+            LEFT JOIN charge_master cm ON dc.charge_id = cm.charge_id
+            WHERE {where} ORDER BY dc.default_id LIMIT %s OFFSET %s""",
+        tuple(params + [limit, offset])
     )
-    return PaginatedResponse(
-        data=[{k.lower(): v for k, v in r.items()} for r in rows],
-        total=total, page=page, limit=limit,
-        total_pages=math.ceil(total / limit) if total > 0 else 1
-    )
+    return PaginatedResponse(data=rows, total=total, page=page, limit=limit,
+                             total_pages=math.ceil(total / limit) if total > 0 else 1)
 
 
 @default_charges_router.get("/{default_id}")
 async def get_default_charge(default_id: int, current_user: UserResponse = Depends(get_current_active_user)):
     row = execute_one(
-        """SELECT dc.*, cm.CHARGE_CODE, cm.CHARGE_NAME
-           FROM ADMIN.DEFAULT_CHARGES dc
-           LEFT JOIN ADMIN.CHARGE_MASTER cm ON dc.CHARGE_ID = cm.CHARGE_ID
-           WHERE dc.DEFAULT_ID = %s""",
-        (default_id,), schema="ADMIN"
+        """SELECT dc.*, cm.charge_code, cm.charge_name
+           FROM default_charges dc
+           LEFT JOIN charge_master cm ON dc.charge_id = cm.charge_id
+           WHERE dc.default_id = %s""",
+        (default_id,)
     )
     if not row:
         raise HTTPException(status_code=404, detail="Default charge not found")
-    return {k.lower(): v for k, v in row.items()}
+    return row
 
 
 @default_charges_router.post("", status_code=201)
 async def create_default_charge(payload: dict, current_user: UserResponse = Depends(get_current_active_user)):
     row = execute_one(
-        """INSERT INTO ADMIN.DEFAULT_CHARGES (CHARGE_ID, JOB_TYPE, TRANSPORT_MODE, AMOUNT, CURRENCY, IS_ACTIVE, CREATED_BY)
-           VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING DEFAULT_ID""",
+        """INSERT INTO default_charges (charge_id, job_type, transport_mode, amount, currency, is_active, created_by)
+           VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING default_id""",
         (payload["charge_id"], payload.get("job_type"), payload.get("transport_mode"),
          payload.get("amount", 0), payload.get("currency", "USD"),
-         payload.get("is_active", True), current_user.user_id),
-        schema="ADMIN"
+         payload.get("is_active", True), current_user.user_id)
     )
-    return {"default_id": row["DEFAULT_ID"] if row else None, "message": "Default charge created"}
+    return {"default_id": row["default_id"] if row else None, "message": "Default charge created"}
 
 
 @default_charges_router.put("/{default_id}", response_model=MessageResponse)
 async def update_default_charge(default_id: int, payload: dict, current_user: UserResponse = Depends(get_current_active_user)):
     execute_write(
-        """UPDATE ADMIN.DEFAULT_CHARGES SET CHARGE_ID=%s, JOB_TYPE=%s, TRANSPORT_MODE=%s,
-           AMOUNT=%s, CURRENCY=%s, IS_ACTIVE=%s, UPDATED_AT=CURRENT_TIMESTAMP()
-           WHERE DEFAULT_ID=%s""",
+        """UPDATE default_charges SET charge_id=%s, job_type=%s, transport_mode=%s,
+           amount=%s, currency=%s, is_active=%s, updated_at=NOW()
+           WHERE default_id=%s""",
         (payload.get("charge_id"), payload.get("job_type"), payload.get("transport_mode"),
          payload.get("amount"), payload.get("currency", "USD"),
-         payload.get("is_active", True), default_id),
-        schema="ADMIN"
+         payload.get("is_active", True), default_id)
     )
     return MessageResponse(message="Default charge updated")
 
 
 @default_charges_router.delete("/{default_id}", response_model=MessageResponse)
 async def delete_default_charge(default_id: int, current_user: UserResponse = Depends(get_current_active_user)):
-    execute_write("UPDATE ADMIN.DEFAULT_CHARGES SET IS_ACTIVE=FALSE WHERE DEFAULT_ID=%s",
-                  (default_id,), schema="ADMIN")
+    execute_write("UPDATE default_charges SET is_active=FALSE WHERE default_id=%s", (default_id,))
     return MessageResponse(message="Default charge deactivated")
 
 
@@ -745,69 +714,61 @@ async def list_custom_clearing(
     conditions = ["1=1"]
     params = []
     if search:
-        conditions.append("(PORT_CODE ILIKE %s OR PORT_NAME ILIKE %s OR CUSTOMS_AUTHORITY ILIKE %s)")
+        conditions.append("(port_code ILIKE %s OR port_name ILIKE %s OR customs_authority ILIKE %s)")
         params.extend([f"%{search}%", f"%{search}%", f"%{search}%"])
     if clearing_type:
-        conditions.append("CLEARING_TYPE = %s")
+        conditions.append("clearing_type = %s")
         params.append(clearing_type)
     where = " AND ".join(conditions)
     offset = (page - 1) * limit
     total = execute_one(
-        f"SELECT COUNT(*) AS CNT FROM ADMIN.CUSTOM_CLEARING_SETUP WHERE {where}",
-        tuple(params), schema="ADMIN"
-    )["CNT"]
+        f"SELECT COUNT(*) AS cnt FROM custom_clearing_setup WHERE {where}",
+        tuple(params)
+    )["cnt"]
     rows = execute_query(
-        f"SELECT * FROM ADMIN.CUSTOM_CLEARING_SETUP WHERE {where} ORDER BY CLEARING_TYPE, PORT_CODE LIMIT %s OFFSET %s",
-        tuple(params + [limit, offset]), schema="ADMIN"
+        f"SELECT * FROM custom_clearing_setup WHERE {where} ORDER BY clearing_type, port_code LIMIT %s OFFSET %s",
+        tuple(params + [limit, offset])
     )
-    return PaginatedResponse(
-        data=[{k.lower(): v for k, v in r.items()} for r in rows],
-        total=total, page=page, limit=limit,
-        total_pages=math.ceil(total / limit) if total > 0 else 1
-    )
+    return PaginatedResponse(data=rows, total=total, page=page, limit=limit,
+                             total_pages=math.ceil(total / limit) if total > 0 else 1)
 
 
 @custom_clearing_router.get("/{setup_id}")
 async def get_custom_clearing(setup_id: int, current_user: UserResponse = Depends(get_current_active_user)):
-    row = execute_one("SELECT * FROM ADMIN.CUSTOM_CLEARING_SETUP WHERE SETUP_ID = %s",
-                      (setup_id,), schema="ADMIN")
+    row = execute_one("SELECT * FROM custom_clearing_setup WHERE setup_id = %s", (setup_id,))
     if not row:
         raise HTTPException(status_code=404, detail="Setup not found")
-    return {k.lower(): v for k, v in row.items()}
+    return row
 
 
 @custom_clearing_router.post("", status_code=201)
 async def create_custom_clearing(payload: dict, current_user: UserResponse = Depends(get_current_active_user)):
-    import json
     row = execute_one(
-        """INSERT INTO ADMIN.CUSTOM_CLEARING_SETUP (CLEARING_TYPE, PORT_CODE, PORT_NAME,
-           CUSTOMS_AUTHORITY, BROKER_ORG_ID, PROCEDURES, REQUIRED_DOCS, IS_ACTIVE, CREATED_BY)
-           VALUES (%s,%s,%s,%s,%s,PARSE_JSON(%s),PARSE_JSON(%s),%s,%s) RETURNING SETUP_ID""",
+        """INSERT INTO custom_clearing_setup (clearing_type, port_code, port_name,
+           customs_authority, broker_org_id, procedures, required_docs, is_active, created_by)
+           VALUES (%s,%s,%s,%s,%s,%s::jsonb,%s::jsonb,%s,%s) RETURNING setup_id""",
         (payload["clearing_type"], payload.get("port_code"), payload.get("port_name"),
          payload.get("customs_authority"), payload.get("broker_org_id"),
          json.dumps(payload.get("procedures", [])),
          json.dumps(payload.get("required_docs", [])),
-         payload.get("is_active", True), current_user.user_id),
-        schema="ADMIN"
+         payload.get("is_active", True), current_user.user_id)
     )
-    return {"setup_id": row["SETUP_ID"] if row else None, "message": "Custom clearing setup created"}
+    return {"setup_id": row["setup_id"] if row else None, "message": "Custom clearing setup created"}
 
 
 @custom_clearing_router.put("/{setup_id}", response_model=MessageResponse)
 async def update_custom_clearing(setup_id: int, payload: dict, current_user: UserResponse = Depends(get_current_active_user)):
     execute_write(
-        """UPDATE ADMIN.CUSTOM_CLEARING_SETUP SET CLEARING_TYPE=%s, PORT_CODE=%s, PORT_NAME=%s,
-           CUSTOMS_AUTHORITY=%s, IS_ACTIVE=%s, UPDATED_AT=CURRENT_TIMESTAMP()
-           WHERE SETUP_ID=%s""",
+        """UPDATE custom_clearing_setup SET clearing_type=%s, port_code=%s, port_name=%s,
+           customs_authority=%s, is_active=%s, updated_at=NOW()
+           WHERE setup_id=%s""",
         (payload.get("clearing_type"), payload.get("port_code"), payload.get("port_name"),
-         payload.get("customs_authority"), payload.get("is_active", True), setup_id),
-        schema="ADMIN"
+         payload.get("customs_authority"), payload.get("is_active", True), setup_id)
     )
     return MessageResponse(message="Setup updated")
 
 
 @custom_clearing_router.delete("/{setup_id}", response_model=MessageResponse)
 async def delete_custom_clearing(setup_id: int, current_user: UserResponse = Depends(get_current_active_user)):
-    execute_write("UPDATE ADMIN.CUSTOM_CLEARING_SETUP SET IS_ACTIVE=FALSE WHERE SETUP_ID=%s",
-                  (setup_id,), schema="ADMIN")
+    execute_write("UPDATE custom_clearing_setup SET is_active=FALSE WHERE setup_id=%s", (setup_id,))
     return MessageResponse(message="Setup deactivated")
