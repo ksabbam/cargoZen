@@ -32,6 +32,6 @@ export default defineConfig({
   preview: {
     host: '0.0.0.0',
     port: process.env.PORT || 5173,
-    allowedHosts: 'cargozen.onrender.com' //remove later
+    allowedHosts: ['cargozen.onrender.com', '.onrender.com', 'all'] //remove later
   }
 })
